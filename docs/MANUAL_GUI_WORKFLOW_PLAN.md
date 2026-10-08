@@ -18,8 +18,8 @@ Why:
 ## Workflow
 
 1. Open a folder containing lecture PDFs.
-2. App scans PDFs and lists every page.
-3. User reviews one page at a time.
+2. App scans PDF page counts and stores metadata only.
+3. App displays a working window around the current PDF: lookback PDFs, current PDF, and lookahead PDFs.
 4. User marks page as selected or rejected.
 5. User toggles view inversion manually per page for readability.
 6. Decisions are reversible with undo.
@@ -32,6 +32,24 @@ Why:
    - 4 slides per page
 11. User renders final PDF parts.
 12. App keeps memory bounded by rendering source pages one by one.
+
+## Working Window Behavior
+
+The app avoids the "too little future context" problem by showing PDF windows instead of tiny page windows.
+
+- Default lookback: 1 PDF.
+- Default lookahead: 4 PDFs.
+- Future PDFs are lookup-only until touched.
+- Selecting/rejecting/inverting any page in a lookup PDF activates that PDF.
+- There is also an explicit "Activate PDF" button.
+- Random navigation is allowed.
+- Final output order remains source PDF order and page order.
+
+Memory remains bounded because the app renders only:
+
+- current full-resolution preview
+- a small low-DPI thumbnail cache
+- one page at a time during final rendering
 
 ## Important UX Gaps To Improve Next
 

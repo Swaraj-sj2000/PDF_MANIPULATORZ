@@ -32,6 +32,7 @@
 #include <QTextStream>
 #include <QToolBar>
 #include <QUrl>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +41,7 @@
 struct PageRef {
     QString pdfPath;
     QString pdfName;
+    int pdfIndex = 0;
     int pageNumber = 1;
 };
 
@@ -197,21 +199,29 @@ private:
     QSpinBox* dpiSpin = nullptr;
     QSpinBox* maxMbSpin = nullptr;
     QSpinBox* chunkSlidesSpin = nullptr;
+    QSpinBox* lookbackPdfSpin = nullptr;
+    QSpinBox* lookaheadPdfSpin = nullptr;
     QComboBox* layoutCombo = nullptr;
     QPushButton* proceedButton = nullptr;
     QPushButton* backButton = nullptr;
     QPushButton* invertAllButton = nullptr;
     QPushButton* resetFinalInvertButton = nullptr;
+    QPushButton* activatePdfButton = nullptr;
     QPushButton* openOutputButton = nullptr;
 
     QString inputDir;
     QString lastOutputDir;
+    QStringList pdfNames;
+    QVector<int> pdfFirstPageIndexes;
+    QVector<int> pdfPageCounts;
+    QSet<int> activePdfIndexes;
     QVector<PageRef> pages;
     QVector<Decision> decisions;
     QVector<UndoItem> undoStack;
     QHash<int, QPixmap> thumbnailCache;
     QVector<int> thumbnailCacheOrder;
     QVector<int> visibleThumbIndexes;
+    QVector<int> displayedPageIndexes;
     Stage stage = Stage::Select;
     int currentIndex = 0;
     int thumbnailRadius = 6;
@@ -231,6 +241,7 @@ private:
         auto* saveButton = new QPushButton("Save Session");
         auto* loadButton = new QPushButton("Load Session");
         auto* exportButton = new QPushButton("Render Final");
+        activatePdfButton = new QPushButton("Activate PDF");
         proceedButton = new QPushButton("Proceed: Normalize");
         backButton = new QPushButton("Back: Select");
         invertAllButton = new QPushButton("Invert All Selected");
@@ -239,6 +250,18 @@ private:
         toolbar->addWidget(openButton);
         toolbar->addWidget(saveButton);
         toolbar->addWidget(loadButton);
+        toolbar->addSeparator();
+        toolbar->addWidget(new QLabel("Back PDFs "));
+        lookbackPdfSpin = new QSpinBox();
+        lookbackPdfSpin->setRange(0, 10);
+        lookbackPdfSpin->setValue(1);
+        toolbar->addWidget(lookbackPdfSpin);
+        toolbar->addWidget(new QLabel(" Ahead PDFs "));
+        lookaheadPdfSpin = new QSpinBox();
+        lookaheadPdfSpin->setRange(0, 20);
+        lookaheadPdfSpin->setValue(4);
+        toolbar->addWidget(lookaheadPdfSpin);
+        toolbar->addWidget(activatePdfButton);
         toolbar->addSeparator();
         toolbar->addWidget(new QLabel("Layout "));
         layoutCombo = new QComboBox();
@@ -321,6 +344,7 @@ private:
         connect(saveButton, &QPushButton::clicked, this, [this]() { saveSession(); });
         connect(loadButton, &QPushButton::clicked, this, [this]() { loadSession(); });
         connect(exportButton, &QPushButton::clicked, this, [this]() { exportFinal(); });
+        connect(activatePdfButton, &QPushButton::clicked, this, [this]() { activateCurrentPdf(); });
         connect(proceedButton, &QPushButton::clicked, this, [this]() { proceedToNormalize(); });
         connect(backButton, &QPushButton::clicked, this, [this]() { backToSelect(); });
         connect(invertAllButton, &QPushButton::clicked, this, [this]() { invertAllSelected(); });
@@ -333,19 +357,21 @@ private:
         connect(invertButton, &QPushButton::clicked, this, [this]() { toggleInvert(); });
         connect(undoButton, &QPushButton::clicked, this, [this]() { undo(); });
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) {
-            if (row >= 0 && row < pages.size()) {
-                currentIndex = row;
+            if (row >= 0 && row < displayedPageIndexes.size()) {
+                currentIndex = displayedPageIndexes[row];
                 updatePreview();
             }
         });
         connect(thumbList, &QListWidget::currentRowChanged, this, [this](int row) {
             if (row >= 0 && row < visibleThumbIndexes.size()) {
                 currentIndex = visibleThumbIndexes[row];
-                list->setCurrentRow(currentIndex);
+                list->setCurrentRow(displayedRowForPage(currentIndex));
                 updatePreview();
             }
         });
         connect(dpiSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
+        connect(lookbackPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
+        connect(lookaheadPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
         updateStageControls();
     }
 
@@ -378,11 +404,36 @@ private:
         const bool hasPages = !pages.isEmpty();
         const bool normalize = stage == Stage::Normalize;
         stageLabel->setText(normalize ? "Stage: Normalize selected pages" : "Stage: Select pages");
+        activatePdfButton->setEnabled(hasPages && !normalize);
         proceedButton->setEnabled(hasPages && !normalize && !selectedIndexes().isEmpty());
         backButton->setEnabled(hasPages && normalize);
         invertAllButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
         resetFinalInvertButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
         openOutputButton->setEnabled(!lastOutputDir.isEmpty());
+    }
+
+    int currentPdfIndex() const
+    {
+        if (currentIndex < 0 || currentIndex >= pages.size()) {
+            return 0;
+        }
+        return pages[currentIndex].pdfIndex;
+    }
+
+    void activatePdf(int pdfIndex)
+    {
+        if (pdfIndex < 0 || pdfIndex >= pdfNames.size()) {
+            return;
+        }
+        activePdfIndexes.insert(pdfIndex);
+        refreshListKeepingCurrent();
+        updateStageControls();
+    }
+
+    void activateCurrentPdf()
+    {
+        activatePdf(currentPdfIndex());
+        setStatus("Activated PDF: " + pdfNames.value(currentPdfIndex()));
     }
 
     void proceedToNormalize()
@@ -400,7 +451,7 @@ private:
         thumbnailCache.clear();
         thumbnailCacheOrder.clear();
         refreshList();
-        list->setCurrentRow(currentIndex);
+        list->setCurrentRow(displayedRowForPage(currentIndex));
         updateStageControls();
         updatePreview();
         setStatus("Normalize selected pages: toggle final inversion, then render.");
@@ -415,7 +466,7 @@ private:
         thumbnailCache.clear();
         thumbnailCacheOrder.clear();
         refreshList();
-        list->setCurrentRow(currentIndex);
+        list->setCurrentRow(displayedRowForPage(currentIndex));
         updateStageControls();
         updatePreview();
     }
@@ -455,6 +506,45 @@ private:
         }
     }
 
+    void rebuildPdfMetadataFromPages()
+    {
+        pdfNames.clear();
+        pdfFirstPageIndexes.clear();
+        pdfPageCounts.clear();
+        QHash<QString, int> pdfIndexByPath;
+        for (int pageIndex = 0; pageIndex < pages.size(); ++pageIndex) {
+            PageRef& page = pages[pageIndex];
+            int pdfIndex = page.pdfIndex;
+            if (pdfIndex < 0 || pdfIndex >= pdfNames.size()) {
+                if (!pdfIndexByPath.contains(page.pdfPath)) {
+                    pdfIndexByPath.insert(page.pdfPath, pdfNames.size());
+                    pdfNames.push_back(page.pdfName);
+                    pdfFirstPageIndexes.push_back(pageIndex);
+                    pdfPageCounts.push_back(0);
+                }
+                pdfIndex = pdfIndexByPath.value(page.pdfPath);
+                page.pdfIndex = pdfIndex;
+            } else if (pdfIndex >= pdfPageCounts.size()) {
+                while (pdfPageCounts.size() <= pdfIndex) {
+                    pdfNames.push_back(page.pdfName);
+                    pdfFirstPageIndexes.push_back(pageIndex);
+                    pdfPageCounts.push_back(0);
+                }
+            }
+            if (pdfIndex >= 0 && pdfIndex < pdfPageCounts.size()) {
+                if (pdfPageCounts[pdfIndex] == 0) {
+                    pdfFirstPageIndexes[pdfIndex] = pageIndex;
+                    if (pdfIndex >= pdfNames.size()) {
+                        pdfNames.push_back(page.pdfName);
+                    } else {
+                        pdfNames[pdfIndex] = page.pdfName;
+                    }
+                }
+                pdfPageCounts[pdfIndex] += 1;
+            }
+        }
+    }
+
     void openFolder()
     {
         const QString folder = QFileDialog::getExistingDirectory(this, "Choose folder with lecture PDFs");
@@ -485,7 +575,11 @@ private:
         });
 
         QVector<PageRef> scanned;
-        for (const QFileInfo& info : pdfs) {
+        QStringList scannedPdfNames;
+        QVector<int> scannedPdfFirstPages;
+        QVector<int> scannedPdfPageCounts;
+        for (int pdfIndex = 0; pdfIndex < pdfs.size(); ++pdfIndex) {
+            const QFileInfo& info = pdfs[pdfIndex];
             QString error;
             const auto count = pdfPageCount(info.absoluteFilePath(), &error);
             if (!count) {
@@ -494,13 +588,23 @@ private:
                 QApplication::setOverrideCursor(Qt::WaitCursor);
                 continue;
             }
+            scannedPdfNames.push_back(info.fileName());
+            scannedPdfFirstPages.push_back(scanned.size());
+            scannedPdfPageCounts.push_back(*count);
             for (int page = 1; page <= *count; ++page) {
-                scanned.push_back({info.absoluteFilePath(), info.fileName(), page});
+                scanned.push_back({info.absoluteFilePath(), info.fileName(), scannedPdfNames.size() - 1, page});
             }
         }
         QApplication::restoreOverrideCursor();
 
         inputDir = folder;
+        pdfNames = scannedPdfNames;
+        pdfFirstPageIndexes = scannedPdfFirstPages;
+        pdfPageCounts = scannedPdfPageCounts;
+        activePdfIndexes.clear();
+        if (!pdfNames.isEmpty()) {
+            activePdfIndexes.insert(0);
+        }
         pages = scanned;
         decisions = QVector<Decision>(pages.size());
         undoStack.clear();
@@ -520,13 +624,42 @@ private:
         const Decision decision = decisions.value(index);
         const PageRef page = pages.value(index);
         const QString mark = decision.selected ? "✓" : "×";
+        const QString active = activePdfIndexes.contains(page.pdfIndex) ? "A" : "L";
         const QString inv = decision.viewInverted ? " view-inv" : "";
         const QString finalInv = decision.finalInverted ? " final-inv" : "";
-        return QString("%1%2  %3  %4  p%5")
-            .arg(mark, inv + finalInv)
+        return QString("[%1] %2%3  %4  %5  p%6")
+            .arg(active, mark, inv + finalInv)
             .arg(index + 1, 4, 10, QChar('0'))
             .arg(page.pdfName)
             .arg(page.pageNumber);
+    }
+
+    QVector<int> displayedIndexes() const
+    {
+        QVector<int> indexes;
+        if (pages.isEmpty()) {
+            return indexes;
+        }
+        if (stage == Stage::Normalize) {
+            return selectedIndexes();
+        }
+
+        const int centerPdf = currentPdfIndex();
+        const int beginPdf = std::max(0, centerPdf - lookbackPdfSpin->value());
+        const int endPdf = std::min(pdfNames.size() - 1, centerPdf + lookaheadPdfSpin->value());
+        for (int pdfIndex = beginPdf; pdfIndex <= endPdf; ++pdfIndex) {
+            const int first = pdfFirstPageIndexes.value(pdfIndex);
+            const int count = pdfPageCounts.value(pdfIndex);
+            for (int offset = 0; offset < count; ++offset) {
+                indexes.push_back(first + offset);
+            }
+        }
+        return indexes;
+    }
+
+    int displayedRowForPage(int pageIndex) const
+    {
+        return displayedPageIndexes.indexOf(pageIndex);
     }
 
     QVector<int> thumbnailIndexes() const
@@ -620,23 +753,33 @@ private:
 
     void refreshList()
     {
+        const QSignalBlocker blocker(list);
         list->clear();
-        for (int i = 0; i < pages.size(); ++i) {
-            list->addItem(rowLabel(i));
+        displayedPageIndexes = displayedIndexes();
+        for (int pageIndex : displayedPageIndexes) {
+            list->addItem(rowLabel(pageIndex));
         }
-        if (!pages.isEmpty()) {
-            list->setCurrentRow(0);
+        const int row = displayedRowForPage(currentIndex);
+        if (row >= 0) {
+            list->setCurrentRow(row);
         }
         refreshThumbnails();
     }
 
+    void refreshListKeepingCurrent()
+    {
+        refreshList();
+        updatePreview();
+    }
+
     void refreshRow(int index)
     {
-        if (index < 0 || index >= list->count()) {
+        const int row = displayedRowForPage(index);
+        if (row < 0 || row >= list->count()) {
             return;
         }
-        list->item(index)->setText(rowLabel(index));
-        list->setCurrentRow(index);
+        list->item(row)->setText(rowLabel(index));
+        list->setCurrentRow(row);
         refreshThumbnails();
     }
 
@@ -680,6 +823,7 @@ private:
         if (pages.isEmpty()) {
             return;
         }
+        activatePdf(currentPdfIndex());
         snapshot();
         decisions[currentIndex].selected = true;
         refreshRow(currentIndex);
@@ -691,6 +835,7 @@ private:
         if (pages.isEmpty()) {
             return;
         }
+        activatePdf(currentPdfIndex());
         snapshot();
         decisions[currentIndex].selected = false;
         refreshRow(currentIndex);
@@ -701,6 +846,9 @@ private:
     {
         if (pages.isEmpty()) {
             return;
+        }
+        if (stage == Stage::Select) {
+            activatePdf(currentPdfIndex());
         }
         snapshot();
         if (stage == Stage::Select) {
@@ -734,8 +882,16 @@ private:
         if (pages.isEmpty()) {
             return;
         }
-        currentIndex = std::max(0, currentIndex - 1);
-        list->setCurrentRow(currentIndex);
+        if (stage == Stage::Normalize) {
+            const QVector<int> selected = selectedIndexes();
+            int position = selected.indexOf(currentIndex);
+            if (position > 0) {
+                currentIndex = selected[position - 1];
+            }
+        } else {
+            currentIndex = std::max(0, currentIndex - 1);
+        }
+        refreshList();
         updatePreview();
     }
 
@@ -744,8 +900,16 @@ private:
         if (pages.isEmpty()) {
             return;
         }
-        currentIndex = std::min(pages.size() - 1, currentIndex + 1);
-        list->setCurrentRow(currentIndex);
+        if (stage == Stage::Normalize) {
+            const QVector<int> selected = selectedIndexes();
+            int position = selected.indexOf(currentIndex);
+            if (position >= 0 && position < selected.size() - 1) {
+                currentIndex = selected[position + 1];
+            }
+        } else {
+            currentIndex = std::min(pages.size() - 1, currentIndex + 1);
+        }
+        refreshList();
         updatePreview();
     }
 
@@ -766,8 +930,13 @@ private:
             QJsonObject item;
             item["pdf_path"] = page.pdfPath;
             item["pdf_name"] = page.pdfName;
+            item["pdf_index"] = page.pdfIndex;
             item["page_number"] = page.pageNumber;
             pageArray.push_back(item);
+        }
+        QJsonArray activeArray;
+        for (int pdfIndex : activePdfIndexes) {
+            activeArray.push_back(pdfIndex);
         }
         QJsonArray decisionArray;
         for (const Decision& decision : decisions) {
@@ -778,6 +947,7 @@ private:
             decisionArray.push_back(item);
         }
         root["pages"] = pageArray;
+        root["active_pdfs"] = activeArray;
         root["decisions"] = decisionArray;
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -807,6 +977,7 @@ private:
             loadedPages.push_back({
                 item["pdf_path"].toString(),
                 item["pdf_name"].toString(),
+                item["pdf_index"].toInt(-1),
                 item["page_number"].toInt()
             });
         }
@@ -829,6 +1000,14 @@ private:
         }
         inputDir = root["input_dir"].toString();
         pages = loadedPages;
+        rebuildPdfMetadataFromPages();
+        activePdfIndexes.clear();
+        for (const QJsonValue& value : root["active_pdfs"].toArray()) {
+            activePdfIndexes.insert(value.toInt());
+        }
+        if (activePdfIndexes.isEmpty() && !pdfNames.isEmpty()) {
+            activePdfIndexes.insert(0);
+        }
         decisions = loadedDecisions;
         undoStack.clear();
         thumbnailCache.clear();

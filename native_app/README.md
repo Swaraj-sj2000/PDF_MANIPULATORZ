@@ -18,6 +18,8 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 1. Select pages.
    - Mark pages selected/rejected.
    - Toggle view inversion for readability.
+   - The left list shows a working window: previous PDFs, current PDF, and future PDFs.
+   - Future PDFs are lookup-only until you select/reject/invert a page or press "Activate PDF".
    - Use the right thumbnail strip to compare nearby pages without loading the whole folder.
 
 2. Normalize selected pages.
@@ -39,6 +41,23 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - `I`: invert current page
 - `Ctrl+Z`: undo last decision
 - `Ctrl+Enter`: proceed from Select to Normalize
+
+## Working Window
+
+The app scans page counts for all PDFs, but it does not render all pages.
+
+Controls:
+
+- `Back PDFs`: how many previous PDFs are visible.
+- `Ahead PDFs`: how many future PDFs are visible.
+- `Activate PDF`: mark the current PDF as part of the review session.
+
+Rows are marked:
+
+- `[A]`: active PDF
+- `[L]`: lookup-only PDF
+
+If you select, reject, or invert a lookup page, that PDF is activated automatically. Final output order is always original PDF/page order, even if you jump around randomly.
 
 ## Build Locally
 
