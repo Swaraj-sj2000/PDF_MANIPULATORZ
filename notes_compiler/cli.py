@@ -68,6 +68,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write small chosen/skipped thumbnails for manual audit.",
     )
+    parser.add_argument(
+        "--window-pages",
+        type=int,
+        default=120,
+        help=(
+            "Only compare a page with this many recent slide groups. "
+            "Keeps memory bounded for large folders."
+        ),
+    )
+    parser.add_argument(
+        "--limit-pages",
+        type=int,
+        default=None,
+        help="Stop after this many rendered pages. Useful for safe smoke tests.",
+    )
     return parser
 
 
@@ -84,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         annotation_threshold=args.annotation_threshold,
         duplicate_threshold=args.duplicate_threshold,
         write_review_thumbnails=args.review_thumbnails,
+        window_pages=args.window_pages,
+        limit_pages=args.limit_pages,
     )
     try:
         result = compile_notes(config)

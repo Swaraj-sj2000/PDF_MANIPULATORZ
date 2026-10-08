@@ -81,6 +81,32 @@ def write_four_up_pdf(images: list[Image.Image], output_path: Path, dpi: int = 1
     first.save(output_path, save_all=True, append_images=rest, resolution=dpi, quality=82)
 
 
+def write_four_up_pdf_from_paths(image_paths: list[Path], output_path: Path, dpi: int = 160) -> None:
+    fitz = require_fitz()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not image_paths:
+        raise ValueError("Cannot write a PDF with no pages.")
+
+    with Image.open(image_paths[0]) as first_image:
+        page_width, page_height = first_image.size
+
+    document = fitz.open()
+    for offset in range(0, len(image_paths), 4):
+        page = document.new_page(width=page_width, height=page_height)
+        for slot, image_path in enumerate(image_paths[offset:offset + 4]):
+            col = slot % 2
+            row = slot // 2
+            rect = fitz.Rect(
+                col * page_width / 2,
+                row * page_height / 2,
+                (col + 1) * page_width / 2,
+                (row + 1) * page_height / 2,
+            )
+            page.insert_image(rect, filename=str(image_path), keep_proportion=True)
+    document.save(output_path, garbage=4, deflate=True)
+    document.close()
+
+
 def fit_image_inside(image: Image.Image, max_width: int, max_height: int) -> Image.Image:
     fitted = image.copy()
     fitted.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
@@ -136,10 +162,13 @@ def max_size_bytes(max_size_mb: float) -> int:
 
 def require_fitz():
     try:
-        import fitz
+        import pymupdf as fitz
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "PyMuPDF is required for PDF rendering. Install dependencies with "
-            "`python3 -m pip install -r requirements.txt`."
-        ) from exc
+        try:
+            import fitz
+        except ModuleNotFoundError:
+            raise RuntimeError(
+                "PyMuPDF is required for PDF rendering. Install dependencies with "
+                "`python3 -m pip install -r requirements.txt`."
+            ) from exc
     return fitz

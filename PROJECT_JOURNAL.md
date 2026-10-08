@@ -369,7 +369,56 @@ The best future upgrade is to add optional vision embeddings:
 
 That upgrade should be added behind an option, not forced into the default local pipeline.
 
-## 8. Commit History To Maintain
+## 8. Scaling Fix: Streaming Window Traversal
+
+The first implementation loaded all rendered page images into memory before grouping and writing output. That is unsafe for large scanned PDF folders because each rendered page can be several megabytes in memory.
+
+The compiler was changed to stream pages one at a time:
+
+1. Render one page.
+2. Analyze and normalize it.
+3. Compare it only against a recent sliding window of groups.
+4. Save the current best page image for each group to disk under `compiled/<name>/page_store/`.
+5. Drop the large in-memory image before moving to the next page.
+
+The key CLI options are:
+
+```bash
+--window-pages 120
+```
+
+Only compare with recent groups. This bounds comparison cost and memory. Increase it when overlap spans many pages; decrease it for faster tests.
+
+```bash
+--limit-pages 20
+```
+
+Stop after a small number of pages. This is the safe smoke-test mode and should be used before any full-folder run.
+
+Safe smoke test command:
+
+```bash
+.venv/bin/python compile_notes.py computer_networks \
+  --out compiled \
+  --dry-run \
+  --review-thumbnails \
+  --limit-pages 20 \
+  --window-pages 30 \
+  --dpi 90
+```
+
+The test completed successfully with:
+
+```text
+Analyzed pages: 20
+Selected pages: 4
+Skipped pages: 16
+Review report: compiled/computer_networks/review/summary.json
+```
+
+The output folder size after this test was about `1.4M`.
+
+## 9. Commit History To Maintain
 
 The intended clean history is:
 
@@ -382,6 +431,7 @@ feature/auto-notes-compiler
   Document automated notes compiler rebuild process
   Allow CLI help without PDF dependency
   Show friendly missing dependency errors
+  Stream compiler with bounded window traversal
 ```
 
 No remote is required at this stage.
