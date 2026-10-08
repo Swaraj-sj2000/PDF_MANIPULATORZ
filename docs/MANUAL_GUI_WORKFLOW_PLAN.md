@@ -65,16 +65,16 @@ These are not blockers for the first native app, but they matter for making it p
 
 ### Batch Actions
 
-- Select/reject all pages in a PDF.
-- Invert all pages in a PDF.
+- Select/reject all pages in a PDF. Initial native prototype now has PDF-level select/reject.
+- Invert all pages in a PDF. Initial native prototype now has PDF-level inversion.
 - Apply inversion to a range.
 - Mark a range as selected/rejected.
 
 ### Visual Review
 
 - Add thumbnail strip for nearby pages. Initial prototype keeps only a small low-DPI window cached.
-- Add side-by-side previous/current page comparison.
-- Add zoom controls.
+- Add side-by-side previous/current page comparison. Initial prototype now has pin/compare.
+- Add zoom controls. Initial prototype now has a zoom control.
 - Add fit-width and fit-page modes.
 
 ### Output Preview
@@ -86,9 +86,19 @@ These are not blockers for the first native app, but they matter for making it p
 ### Safety
 
 - Warn before rendering if no session was saved.
-- Autosave session periodically.
-- Keep a recovery session file.
+- Autosave session periodically. Initial prototype autosaves into `.manual_notes_autosave.json`.
+- Keep a recovery session file. Initial prototype offers recovery when reopening a folder.
 - Show temp/output disk usage before rendering.
+
+### Branding
+
+A logo drop-zone is available at:
+
+```text
+assets/logo_dropzone/
+```
+
+Drop `logo.svg` or a small PNG there when branding is ready.
 
 ### Future Assistive Automation
 

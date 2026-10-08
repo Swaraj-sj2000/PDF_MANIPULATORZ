@@ -12,6 +12,8 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - Uses `QPdfWriter` to write final PDFs.
 - Does not ingest an entire folder of rendered pages into memory.
 - Keeps only one full-resolution preview and a small low-resolution thumbnail cache.
+- Autosaves review sessions to `.manual_notes_autosave.json` in the opened folder.
+- Writes each render into a timestamped output folder to avoid overwriting older outputs.
 
 ## Stages
 
@@ -41,6 +43,8 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - `I`: invert current page
 - `Ctrl+Z`: undo last decision
 - `Ctrl+Enter`: proceed from Select to Normalize
+- `Ctrl+S`: save session
+- `P`: pin current page for side-by-side comparison
 
 ## Working Window
 
@@ -51,6 +55,10 @@ Controls:
 - `Back PDFs`: how many previous PDFs are visible.
 - `Ahead PDFs`: how many future PDFs are visible.
 - `Activate PDF`: mark the current PDF as part of the review session.
+- `Select PDF`: select every page in the current PDF.
+- `Reject PDF`: reject every page in the current PDF.
+- `Invert PDF`: invert every page in the current PDF for the current stage.
+- `Mark PDF Done`: mark the current PDF as reviewed.
 
 Rows are marked:
 

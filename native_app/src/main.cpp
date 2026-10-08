@@ -30,12 +30,14 @@
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QTimer>
 #include <QToolBar>
 #include <QUrl>
 #include <QSet>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <optional>
 
 struct PageRef {
@@ -182,6 +184,11 @@ public:
         resize(1220, 780);
         buildUi();
         bindShortcuts();
+        checkRuntimeDependencies();
+        autosaveTimer = new QTimer(this);
+        autosaveTimer->setInterval(60000);
+        connect(autosaveTimer, &QTimer::timeout, this, [this]() { autosaveSession(); });
+        autosaveTimer->start();
         setStatus("Choose a folder to begin.");
     }
 
@@ -194,6 +201,7 @@ private:
     QListWidget* list = nullptr;
     QListWidget* thumbList = nullptr;
     QLabel* preview = nullptr;
+    QLabel* pinnedPreview = nullptr;
     QLabel* pageStatus = nullptr;
     QLabel* stageLabel = nullptr;
     QSpinBox* dpiSpin = nullptr;
@@ -201,20 +209,32 @@ private:
     QSpinBox* chunkSlidesSpin = nullptr;
     QSpinBox* lookbackPdfSpin = nullptr;
     QSpinBox* lookaheadPdfSpin = nullptr;
+    QSpinBox* zoomSpin = nullptr;
     QComboBox* layoutCombo = nullptr;
     QPushButton* proceedButton = nullptr;
     QPushButton* backButton = nullptr;
     QPushButton* invertAllButton = nullptr;
     QPushButton* resetFinalInvertButton = nullptr;
     QPushButton* activatePdfButton = nullptr;
+    QPushButton* selectPdfButton = nullptr;
+    QPushButton* rejectPdfButton = nullptr;
+    QPushButton* invertPdfButton = nullptr;
+    QPushButton* markDoneButton = nullptr;
+    QPushButton* prevPdfButton = nullptr;
+    QPushButton* nextPdfButton = nullptr;
+    QPushButton* pinPageButton = nullptr;
+    QPushButton* clearPinButton = nullptr;
     QPushButton* openOutputButton = nullptr;
+    QPushButton* openFirstPdfButton = nullptr;
 
     QString inputDir;
     QString lastOutputDir;
+    QStringList generatedPdfPaths;
     QStringList pdfNames;
     QVector<int> pdfFirstPageIndexes;
     QVector<int> pdfPageCounts;
     QSet<int> activePdfIndexes;
+    QSet<int> donePdfIndexes;
     QVector<PageRef> pages;
     QVector<Decision> decisions;
     QVector<UndoItem> undoStack;
@@ -224,8 +244,11 @@ private:
     QVector<int> displayedPageIndexes;
     Stage stage = Stage::Select;
     int currentIndex = 0;
+    int pinnedIndex = -1;
     int thumbnailRadius = 6;
     int maxThumbnailCache = 48;
+    bool dirty = false;
+    QTimer* autosaveTimer = nullptr;
 
     void buildUi()
     {
@@ -242,11 +265,20 @@ private:
         auto* loadButton = new QPushButton("Load Session");
         auto* exportButton = new QPushButton("Render Final");
         activatePdfButton = new QPushButton("Activate PDF");
+        selectPdfButton = new QPushButton("Select PDF");
+        rejectPdfButton = new QPushButton("Reject PDF");
+        invertPdfButton = new QPushButton("Invert PDF");
+        markDoneButton = new QPushButton("Mark PDF Done");
+        prevPdfButton = new QPushButton("Prev PDF");
+        nextPdfButton = new QPushButton("Next PDF");
         proceedButton = new QPushButton("Proceed: Normalize");
         backButton = new QPushButton("Back: Select");
         invertAllButton = new QPushButton("Invert All Selected");
         resetFinalInvertButton = new QPushButton("Reset Final Invert");
+        pinPageButton = new QPushButton("Pin Page");
+        clearPinButton = new QPushButton("Clear Pin");
         openOutputButton = new QPushButton("Open Output Folder");
+        openFirstPdfButton = new QPushButton("Open First PDF");
         toolbar->addWidget(openButton);
         toolbar->addWidget(saveButton);
         toolbar->addWidget(loadButton);
@@ -261,7 +293,13 @@ private:
         lookaheadPdfSpin->setRange(0, 20);
         lookaheadPdfSpin->setValue(4);
         toolbar->addWidget(lookaheadPdfSpin);
+        toolbar->addWidget(prevPdfButton);
+        toolbar->addWidget(nextPdfButton);
         toolbar->addWidget(activatePdfButton);
+        toolbar->addWidget(selectPdfButton);
+        toolbar->addWidget(rejectPdfButton);
+        toolbar->addWidget(invertPdfButton);
+        toolbar->addWidget(markDoneButton);
         toolbar->addSeparator();
         toolbar->addWidget(new QLabel("Layout "));
         layoutCombo = new QComboBox();
@@ -286,25 +324,43 @@ private:
         chunkSlidesSpin->setRange(4, 500);
         chunkSlidesSpin->setValue(80);
         toolbar->addWidget(chunkSlidesSpin);
+        toolbar->addWidget(new QLabel(" Zoom "));
+        zoomSpin = new QSpinBox();
+        zoomSpin->setRange(25, 200);
+        zoomSpin->setValue(100);
+        toolbar->addWidget(zoomSpin);
         toolbar->addSeparator();
         toolbar->addWidget(proceedButton);
         toolbar->addWidget(backButton);
         toolbar->addWidget(invertAllButton);
         toolbar->addWidget(resetFinalInvertButton);
+        toolbar->addWidget(pinPageButton);
+        toolbar->addWidget(clearPinButton);
         toolbar->addSeparator();
         toolbar->addWidget(exportButton);
         toolbar->addWidget(openOutputButton);
+        toolbar->addWidget(openFirstPdfButton);
 
         auto* splitter = new QSplitter();
         list = new QListWidget();
         list->setMinimumWidth(360);
         splitter->addWidget(list);
 
+        auto* previewPane = new QWidget();
+        auto* previewLayout = new QHBoxLayout(previewPane);
+        previewLayout->setContentsMargins(0, 0, 0, 0);
         preview = new QLabel("No page loaded");
         preview->setAlignment(Qt::AlignCenter);
         preview->setMinimumSize(500, 420);
         preview->setStyleSheet("background: #202020; color: #dddddd;");
-        splitter->addWidget(preview);
+        pinnedPreview = new QLabel("No pinned page");
+        pinnedPreview->setAlignment(Qt::AlignCenter);
+        pinnedPreview->setMinimumSize(300, 420);
+        pinnedPreview->setStyleSheet("background: #202020; color: #dddddd;");
+        pinnedPreview->hide();
+        previewLayout->addWidget(preview, 2);
+        previewLayout->addWidget(pinnedPreview, 1);
+        splitter->addWidget(previewPane);
         splitter->setStretchFactor(1, 1);
 
         thumbList = new QListWidget();
@@ -345,11 +401,20 @@ private:
         connect(loadButton, &QPushButton::clicked, this, [this]() { loadSession(); });
         connect(exportButton, &QPushButton::clicked, this, [this]() { exportFinal(); });
         connect(activatePdfButton, &QPushButton::clicked, this, [this]() { activateCurrentPdf(); });
+        connect(selectPdfButton, &QPushButton::clicked, this, [this]() { selectCurrentPdf(); });
+        connect(rejectPdfButton, &QPushButton::clicked, this, [this]() { rejectCurrentPdf(); });
+        connect(invertPdfButton, &QPushButton::clicked, this, [this]() { invertCurrentPdf(); });
+        connect(markDoneButton, &QPushButton::clicked, this, [this]() { markCurrentPdfDone(); });
+        connect(prevPdfButton, &QPushButton::clicked, this, [this]() { jumpPdf(-1); });
+        connect(nextPdfButton, &QPushButton::clicked, this, [this]() { jumpPdf(1); });
         connect(proceedButton, &QPushButton::clicked, this, [this]() { proceedToNormalize(); });
         connect(backButton, &QPushButton::clicked, this, [this]() { backToSelect(); });
         connect(invertAllButton, &QPushButton::clicked, this, [this]() { invertAllSelected(); });
         connect(resetFinalInvertButton, &QPushButton::clicked, this, [this]() { resetFinalInversion(); });
+        connect(pinPageButton, &QPushButton::clicked, this, [this]() { pinCurrentPage(); });
+        connect(clearPinButton, &QPushButton::clicked, this, [this]() { clearPinnedPage(); });
         connect(openOutputButton, &QPushButton::clicked, this, [this]() { openOutputFolder(); });
+        connect(openFirstPdfButton, &QPushButton::clicked, this, [this]() { openFirstGeneratedPdf(); });
         connect(prevButton, &QPushButton::clicked, this, [this]() { previousPage(); });
         connect(nextButton, &QPushButton::clicked, this, [this]() { nextPage(); });
         connect(selectButton, &QPushButton::clicked, this, [this]() { selectPage(); });
@@ -370,6 +435,7 @@ private:
             }
         });
         connect(dpiSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
+        connect(zoomSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
         connect(lookbackPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
         connect(lookaheadPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
         updateStageControls();
@@ -384,11 +450,48 @@ private:
         new QShortcut(QKeySequence(Qt::Key_I), this, [this]() { toggleInvert(); });
         new QShortcut(QKeySequence::Undo, this, [this]() { undo(); });
         new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), this, [this]() { proceedToNormalize(); });
+        new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_S), this, [this]() { saveSession(); });
+        new QShortcut(QKeySequence(Qt::Key_P), this, [this]() { pinCurrentPage(); });
     }
 
     void setStatus(const QString& text)
     {
         statusBar()->showMessage(text);
+    }
+
+    void checkRuntimeDependencies()
+    {
+        QStringList missing;
+        for (const QString& command : {"pdfinfo", "pdftoppm"}) {
+            QProcess process;
+            process.start("which", {command});
+            process.waitForFinished(3000);
+            if (process.exitCode() != 0) {
+                missing.push_back(command);
+            }
+        }
+        if (!missing.isEmpty()) {
+            QMessageBox::warning(
+                this,
+                "Missing PDF tools",
+                "The app needs these commands: " + missing.join(", ") +
+                    "\nInstall them with: sudo apt install poppler-utils"
+            );
+        }
+    }
+
+    void markDirty()
+    {
+        dirty = true;
+        updateStageControls();
+    }
+
+    QString autosavePath() const
+    {
+        if (inputDir.isEmpty()) {
+            return {};
+        }
+        return QDir(inputDir).filePath(".manual_notes_autosave.json");
     }
 
     bool previewInverted(int index) const
@@ -405,11 +508,20 @@ private:
         const bool normalize = stage == Stage::Normalize;
         stageLabel->setText(normalize ? "Stage: Normalize selected pages" : "Stage: Select pages");
         activatePdfButton->setEnabled(hasPages && !normalize);
+        selectPdfButton->setEnabled(hasPages && !normalize);
+        rejectPdfButton->setEnabled(hasPages && !normalize);
+        invertPdfButton->setEnabled(hasPages);
+        markDoneButton->setEnabled(hasPages && !normalize);
+        prevPdfButton->setEnabled(hasPages && !normalize);
+        nextPdfButton->setEnabled(hasPages && !normalize);
         proceedButton->setEnabled(hasPages && !normalize && !selectedIndexes().isEmpty());
         backButton->setEnabled(hasPages && normalize);
         invertAllButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
         resetFinalInvertButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
+        pinPageButton->setEnabled(hasPages);
+        clearPinButton->setEnabled(pinnedIndex >= 0);
         openOutputButton->setEnabled(!lastOutputDir.isEmpty());
+        openFirstPdfButton->setEnabled(!generatedPdfPaths.isEmpty());
     }
 
     int currentPdfIndex() const
@@ -428,12 +540,91 @@ private:
         activePdfIndexes.insert(pdfIndex);
         refreshListKeepingCurrent();
         updateStageControls();
+        markDirty();
     }
 
     void activateCurrentPdf()
     {
         activatePdf(currentPdfIndex());
         setStatus("Activated PDF: " + pdfNames.value(currentPdfIndex()));
+    }
+
+    void applyToPdf(int pdfIndex, const std::function<void(int)>& action)
+    {
+        if (pdfIndex < 0 || pdfIndex >= pdfPageCounts.size()) {
+            return;
+        }
+        activatePdf(pdfIndex);
+        const int first = pdfFirstPageIndexes.value(pdfIndex);
+        const int count = pdfPageCounts.value(pdfIndex);
+        for (int offset = 0; offset < count; ++offset) {
+            const int pageIndex = first + offset;
+            snapshotIndex(pageIndex);
+            action(pageIndex);
+            evictThumbnail(pageIndex);
+        }
+        refreshListKeepingCurrent();
+        markDirty();
+    }
+
+    void selectCurrentPdf()
+    {
+        applyToPdf(currentPdfIndex(), [this](int index) { decisions[index].selected = true; });
+    }
+
+    void rejectCurrentPdf()
+    {
+        applyToPdf(currentPdfIndex(), [this](int index) { decisions[index].selected = false; });
+    }
+
+    void invertCurrentPdf()
+    {
+        const bool normalize = stage == Stage::Normalize;
+        applyToPdf(currentPdfIndex(), [this, normalize](int index) {
+            if (normalize) {
+                decisions[index].finalInverted = !decisions[index].finalInverted;
+            } else {
+                decisions[index].viewInverted = !decisions[index].viewInverted;
+            }
+        });
+    }
+
+    void markCurrentPdfDone()
+    {
+        donePdfIndexes.insert(currentPdfIndex());
+        activePdfIndexes.insert(currentPdfIndex());
+        refreshListKeepingCurrent();
+        markDirty();
+    }
+
+    void jumpPdf(int direction)
+    {
+        if (pages.isEmpty()) {
+            return;
+        }
+        const int nextPdf = std::clamp(currentPdfIndex() + direction, 0, pdfNames.size() - 1);
+        currentIndex = pdfFirstPageIndexes.value(nextPdf, currentIndex);
+        refreshListKeepingCurrent();
+    }
+
+    void pinCurrentPage()
+    {
+        if (pages.isEmpty()) {
+            return;
+        }
+        pinnedIndex = currentIndex;
+        updatePreview();
+        updateStageControls();
+    }
+
+    void clearPinnedPage()
+    {
+        pinnedIndex = -1;
+        pinnedPreview->clear();
+        pinnedPreview->setText("No pinned page");
+        pinnedPreview->hide();
+        updatePreview();
+        updateStageControls();
     }
 
     void proceedToNormalize()
@@ -455,6 +646,7 @@ private:
         updateStageControls();
         updatePreview();
         setStatus("Normalize selected pages: toggle final inversion, then render.");
+        markDirty();
     }
 
     void backToSelect()
@@ -469,6 +661,7 @@ private:
         list->setCurrentRow(displayedRowForPage(currentIndex));
         updateStageControls();
         updatePreview();
+        markDirty();
     }
 
     void invertAllSelected()
@@ -483,6 +676,7 @@ private:
             refreshRow(index);
         }
         updatePreview();
+        markDirty();
     }
 
     void resetFinalInversion()
@@ -497,12 +691,20 @@ private:
             refreshRow(index);
         }
         updatePreview();
+        markDirty();
     }
 
     void openOutputFolder()
     {
         if (!lastOutputDir.isEmpty()) {
             QDesktopServices::openUrl(QUrl::fromLocalFile(lastOutputDir));
+        }
+    }
+
+    void openFirstGeneratedPdf()
+    {
+        if (!generatedPdfPaths.isEmpty()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(generatedPdfPaths.first()));
         }
     }
 
@@ -598,10 +800,13 @@ private:
         QApplication::restoreOverrideCursor();
 
         inputDir = folder;
+        lastOutputDir.clear();
+        generatedPdfPaths.clear();
         pdfNames = scannedPdfNames;
         pdfFirstPageIndexes = scannedPdfFirstPages;
         pdfPageCounts = scannedPdfPageCounts;
         activePdfIndexes.clear();
+        donePdfIndexes.clear();
         if (!pdfNames.isEmpty()) {
             activePdfIndexes.insert(0);
         }
@@ -613,10 +818,13 @@ private:
         visibleThumbIndexes.clear();
         stage = Stage::Select;
         currentIndex = 0;
+        pinnedIndex = -1;
         refreshList();
         updatePreview();
         updateStageControls();
         setStatus(QString("Loaded %1 pages from %2").arg(pages.size()).arg(folder));
+        dirty = false;
+        offerAutosaveRecovery();
     }
 
     QString rowLabel(int index) const
@@ -625,10 +833,11 @@ private:
         const PageRef page = pages.value(index);
         const QString mark = decision.selected ? "✓" : "×";
         const QString active = activePdfIndexes.contains(page.pdfIndex) ? "A" : "L";
+        const QString done = donePdfIndexes.contains(page.pdfIndex) ? " done" : "";
         const QString inv = decision.viewInverted ? " view-inv" : "";
         const QString finalInv = decision.finalInverted ? " final-inv" : "";
-        return QString("[%1] %2%3  %4  %5  p%6")
-            .arg(active, mark, inv + finalInv)
+        return QString("[%1%2] %3%4  %5  %6  p%7")
+            .arg(active, done, mark, inv + finalInv)
             .arg(index + 1, 4, 10, QChar('0'))
             .arg(page.pdfName)
             .arg(page.pageNumber);
@@ -798,11 +1007,12 @@ private:
             return;
         }
         const QPixmap pixmap = QPixmap::fromImage(image).scaled(
-            preview->size() - QSize(20, 20),
+            scaledPreviewSize(preview, image.size()),
             Qt::KeepAspectRatio,
             Qt::SmoothTransformation
         );
         preview->setPixmap(pixmap);
+        updatePinnedPreview();
         const int selected = std::count_if(decisions.begin(), decisions.end(), [](const Decision& item) {
             return item.selected;
         });
@@ -811,10 +1021,54 @@ private:
         refreshThumbnails();
     }
 
+    QSize scaledPreviewSize(QLabel* label, const QSize& imageSize) const
+    {
+        QSize fit = label->size() - QSize(20, 20);
+        if (fit.width() < 50 || fit.height() < 50) {
+            fit = QSize(400, 400);
+        }
+        if (zoomSpin->value() == 100) {
+            return fit;
+        }
+        QSize zoomed = imageSize;
+        zoomed.scale(fit, Qt::KeepAspectRatio);
+        zoomed *= zoomSpin->value() / 100.0;
+        return zoomed;
+    }
+
+    void updatePinnedPreview()
+    {
+        if (pinnedIndex < 0 || pinnedIndex >= pages.size()) {
+            pinnedPreview->hide();
+            return;
+        }
+        QString error;
+        QImage image = renderPage(pages[pinnedIndex], dpiSpin->value(), previewInverted(pinnedIndex), &error);
+        if (image.isNull()) {
+            pinnedPreview->setText("Pinned render failed");
+            pinnedPreview->show();
+            return;
+        }
+        const QPixmap pixmap = QPixmap::fromImage(image).scaled(
+            scaledPreviewSize(pinnedPreview, image.size()),
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+        );
+        pinnedPreview->setPixmap(pixmap);
+        pinnedPreview->show();
+    }
+
     void snapshot()
     {
         if (currentIndex >= 0 && currentIndex < decisions.size()) {
             undoStack.push_back({currentIndex, decisions[currentIndex]});
+        }
+    }
+
+    void snapshotIndex(int index)
+    {
+        if (index >= 0 && index < decisions.size()) {
+            undoStack.push_back({index, decisions[index]});
         }
     }
 
@@ -827,6 +1081,7 @@ private:
         snapshot();
         decisions[currentIndex].selected = true;
         refreshRow(currentIndex);
+        markDirty();
         nextPage();
     }
 
@@ -839,6 +1094,7 @@ private:
         snapshot();
         decisions[currentIndex].selected = false;
         refreshRow(currentIndex);
+        markDirty();
         nextPage();
     }
 
@@ -860,6 +1116,7 @@ private:
         }
         refreshRow(currentIndex);
         updatePreview();
+        markDirty();
     }
 
     void undo()
@@ -874,6 +1131,7 @@ private:
             evictThumbnail(item.index);
             refreshRow(item.index);
             updatePreview();
+            markDirty();
         }
     }
 
@@ -923,8 +1181,20 @@ private:
         if (path.isEmpty()) {
             return;
         }
+        if (!writeSessionFile(path, false)) {
+            return;
+        }
+        dirty = false;
+        setStatus("Saved session: " + path);
+    }
+
+    bool writeSessionFile(const QString& path, bool silent)
+    {
         QJsonObject root;
         root["input_dir"] = inputDir;
+        root["stage"] = stage == Stage::Normalize ? "normalize" : "select";
+        root["current_index"] = currentIndex;
+        root["pinned_index"] = pinnedIndex;
         QJsonArray pageArray;
         for (const PageRef& page : pages) {
             QJsonObject item;
@@ -938,6 +1208,10 @@ private:
         for (int pdfIndex : activePdfIndexes) {
             activeArray.push_back(pdfIndex);
         }
+        QJsonArray doneArray;
+        for (int pdfIndex : donePdfIndexes) {
+            doneArray.push_back(pdfIndex);
+        }
         QJsonArray decisionArray;
         for (const Decision& decision : decisions) {
             QJsonObject item;
@@ -948,14 +1222,45 @@ private:
         }
         root["pages"] = pageArray;
         root["active_pdfs"] = activeArray;
+        root["done_pdfs"] = doneArray;
         root["decisions"] = decisionArray;
         QFile file(path);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            QMessageBox::warning(this, "Save failed", file.errorString());
-            return;
+            if (!silent) {
+                QMessageBox::warning(this, "Save failed", file.errorString());
+            }
+            return false;
         }
         file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-        setStatus("Saved session: " + path);
+        return true;
+    }
+
+    void autosaveSession()
+    {
+        if (!dirty || pages.isEmpty() || inputDir.isEmpty()) {
+            return;
+        }
+        const QString path = autosavePath();
+        if (writeSessionFile(path, true)) {
+            dirty = false;
+            setStatus("Autosaved session.");
+        }
+    }
+
+    void offerAutosaveRecovery()
+    {
+        const QString path = autosavePath();
+        if (path.isEmpty() || !QFileInfo::exists(path)) {
+            return;
+        }
+        const auto answer = QMessageBox::question(
+            this,
+            "Recover autosave?",
+            "An autosaved review session exists for this folder. Load it?"
+        );
+        if (answer == QMessageBox::Yes) {
+            loadSessionFile(path);
+        }
     }
 
     void loadSession()
@@ -964,10 +1269,15 @@ private:
         if (path.isEmpty()) {
             return;
         }
+        loadSessionFile(path);
+    }
+
+    bool loadSessionFile(const QString& path)
+    {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) {
             QMessageBox::warning(this, "Load failed", file.errorString());
-            return;
+            return false;
         }
         const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
         const QJsonObject root = document.object();
@@ -1005,6 +1315,10 @@ private:
         for (const QJsonValue& value : root["active_pdfs"].toArray()) {
             activePdfIndexes.insert(value.toInt());
         }
+        donePdfIndexes.clear();
+        for (const QJsonValue& value : root["done_pdfs"].toArray()) {
+            donePdfIndexes.insert(value.toInt());
+        }
         if (activePdfIndexes.isEmpty() && !pdfNames.isEmpty()) {
             activePdfIndexes.insert(0);
         }
@@ -1013,12 +1327,15 @@ private:
         thumbnailCache.clear();
         thumbnailCacheOrder.clear();
         visibleThumbIndexes.clear();
-        stage = Stage::Select;
-        currentIndex = 0;
+        stage = root["stage"].toString() == "normalize" ? Stage::Normalize : Stage::Select;
+        currentIndex = std::clamp(root["current_index"].toInt(0), 0, std::max(0, pages.size() - 1));
+        pinnedIndex = root["pinned_index"].toInt(-1);
         refreshList();
         updatePreview();
         updateStageControls();
         setStatus("Loaded session: " + path);
+        dirty = false;
+        return true;
     }
 
     QVector<int> selectedIndexes() const
@@ -1055,12 +1372,17 @@ private:
         if (outputDir.isEmpty()) {
             return;
         }
+        const QString runName = QFileInfo(inputDir).fileName().replace(' ', '_') + "_" +
+            QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+        const QString runDir = QDir(outputDir).filePath(runName);
+        QDir().mkpath(runDir);
 
         QProgressDialog progress("Rendering selected pages...", "Cancel", 0, selected.size(), this);
         progress.setWindowModality(Qt::ApplicationModal);
         progress.show();
 
         QStringList outputs;
+        generatedPdfPaths.clear();
         int start = 0;
         int part = 1;
         int chunkSize = std::min(chunkSlidesSpin->value(), selected.size());
@@ -1071,7 +1393,7 @@ private:
             }
             const int count = std::min(chunkSize, selected.size() - start);
             const QString path = QString("%1/%2_compiled_part_%3.pdf")
-                .arg(outputDir)
+                .arg(runDir)
                 .arg(QFileInfo(inputDir).fileName().replace(' ', '_'))
                 .arg(part, 2, 10, QChar('0'));
             QString error;
@@ -1086,6 +1408,7 @@ private:
                 continue;
             }
             outputs.push_back(path + " (" + humanSize(size) + ")");
+            generatedPdfPaths.push_back(path);
             start += count;
             ++part;
             if (size < maxBytes / 2 && chunkSize < chunkSlidesSpin->value()) {
@@ -1094,10 +1417,37 @@ private:
         }
         progress.close();
         if (!outputs.isEmpty()) {
-            lastOutputDir = outputDir;
+            writeExportReport(runDir, selected, generatedPdfPaths);
+            lastOutputDir = runDir;
             QMessageBox::information(this, "Render complete", outputs.join("\n"));
             setStatus(QString("Rendered %1 part(s).").arg(outputs.size()));
             updateStageControls();
+        }
+    }
+
+    void writeExportReport(const QString& runDir, const QVector<int>& selected, const QStringList& outputs)
+    {
+        QFile file(QDir(runDir).filePath("selected_pages_report.csv"));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            return;
+        }
+        QTextStream out(&file);
+        out << "order,source_pdf,page_number,view_inverted,final_inverted\n";
+        for (int position = 0; position < selected.size(); ++position) {
+            const int index = selected[position];
+            const PageRef& page = pages[index];
+            const Decision& decision = decisions[index];
+            QString pdfName = page.pdfName;
+            pdfName.replace("\"", "\"\"");
+            out << (position + 1) << ",\""
+                << pdfName << "\","
+                << page.pageNumber << ","
+                << (decision.viewInverted ? "true" : "false") << ","
+                << (decision.finalInverted ? "true" : "false") << "\n";
+        }
+        out << "\noutputs\n";
+        for (const QString& path : outputs) {
+            out << '"' << path << '"' << "\n";
         }
     }
 
