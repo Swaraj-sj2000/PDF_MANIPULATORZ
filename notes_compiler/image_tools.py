@@ -119,6 +119,15 @@ def similarity(left: PageAnalysis, right: PageAnalysis) -> float:
     return (d_score * 0.35) + (a_score * 0.25) + (pixel_score * 0.40)
 
 
+def duplicate_evidence(left: PageAnalysis, right: PageAnalysis) -> tuple[float, float, float, float]:
+    hash_bits = 16 * 16
+    d_score = 1.0 - (hamming(left.dhash, right.dhash) / hash_bits)
+    a_score = 1.0 - (hamming(left.ahash, right.ahash) / hash_bits)
+    pixel_score = mse_similarity(left.compare_image, right.compare_image)
+    combined = (d_score * 0.35) + (a_score * 0.25) + (pixel_score * 0.40)
+    return combined, d_score, a_score, pixel_score
+
+
 def save_thumbnail(image: Image.Image, path: Path, width: int = 360) -> None:
     thumb = image.copy()
     ratio = width / thumb.width

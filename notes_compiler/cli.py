@@ -60,8 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--duplicate-threshold",
         type=float,
-        default=0.82,
+        default=0.94,
         help="Similarity threshold used to group repeated slides.",
+    )
+    parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="Keep every page, but still report likely duplicate groups and inversion decisions.",
     )
     parser.add_argument(
         "--review-thumbnails",
@@ -101,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         dpi=args.dpi,
         dry_run=args.dry_run,
         keep_unannotated_unique=args.keep_unannotated_unique,
+        audit_only=args.audit_only,
         annotation_threshold=args.annotation_threshold,
         duplicate_threshold=args.duplicate_threshold,
         write_review_thumbnails=args.review_thumbnails,

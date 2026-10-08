@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .image_tools import PageAnalysis, analyze_page, save_thumbnail, similarity
+from .image_tools import PageAnalysis, analyze_page, duplicate_evidence, save_thumbnail
 from .pdf_tools import (
     max_size_bytes,
     pdfs_in_lecture_order,
@@ -27,8 +27,9 @@ class CompilerConfig:
     dpi: int = 160
     dry_run: bool = False
     keep_unannotated_unique: bool = False
+    audit_only: bool = False
     annotation_threshold: float = 0.022
-    duplicate_threshold: float = 0.82
+    duplicate_threshold: float = 0.94
     write_review_thumbnails: bool = False
     window_pages: int = 120
     limit_pages: int | None = None
@@ -56,6 +57,7 @@ class ActiveGroup:
     best_record: PageRecord
     best_analysis: PageAnalysis
     size: int = 1
+    match_score: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -75,14 +77,20 @@ def compile_notes(config: CompilerConfig) -> CompileResult:
     page_store = run_dir / "page_store"
     review_dir.mkdir(parents=True, exist_ok=True)
     page_store.mkdir(parents=True, exist_ok=True)
+    clean_review_thumbnails(review_dir)
 
     try:
         records, groups = stream_pages(input_dir, page_store, config)
-        selected = [
-            group.best_record
-            for group in sorted(groups, key=lambda item: item.first_order_index)
-            if group.best_record.decision == "selected"
-        ]
+        if config.audit_only:
+            for record in records:
+                record.decision = "selected"
+            selected = sorted(records, key=lambda record: record.order_index)
+        else:
+            selected = [
+                group.best_record
+                for group in sorted(groups, key=lambda item: item.first_order_index)
+                if group.best_record.decision == "selected"
+            ]
         skipped = [record for record in records if record.decision == "skipped"]
 
         report_path = write_reports(
@@ -190,6 +198,9 @@ def finalize_groups(
             best.decision = "selected"
         else:
             best.decision = "skipped"
+    if config.audit_only:
+        for group in groups:
+            group.best_record.decision = "selected"
     return groups
 
 
@@ -206,11 +217,18 @@ def best_recent_group_match(
     for group in reversed(groups):
         if group.last_order_index < min_order:
             break
-        score = similarity(analysis, group.best_analysis)
+        score, d_score, a_score, pixel_score = duplicate_evidence(analysis, group.best_analysis)
         if score > best_score:
             best_score = score
             best_group = group
-    if best_score >= duplicate_threshold:
+        if score < duplicate_threshold:
+            continue
+        if min(d_score, a_score, pixel_score) < 0.90:
+            continue
+        detail_gap = abs(analysis.detail_score - group.best_record.detail_score)
+        if detail_gap > 0.12:
+            continue
+        group.match_score = score
         return best_group
     return None
 
@@ -287,6 +305,7 @@ def write_reports(
         "limit_pages": config.limit_pages,
         "keep_temp": config.keep_temp,
         "keep_unannotated_unique": config.keep_unannotated_unique,
+        "audit_only": config.audit_only,
         "total_pages": len(records),
         "duplicate_groups": len(groups),
         "selected_pages": sum(1 for record in records if record.decision == "selected"),
@@ -312,3 +331,8 @@ def write_review_thumbs(review_dir: Path, records: list[PageRecord]) -> None:
             )
         finally:
             image.close()
+
+
+def clean_review_thumbnails(review_dir: Path) -> None:
+    for name in ("selected", "skipped", "pending"):
+        shutil.rmtree(review_dir / name, ignore_errors=True)

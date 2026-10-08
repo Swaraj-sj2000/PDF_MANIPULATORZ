@@ -411,7 +411,8 @@ Safe smoke test command:
   --review-thumbnails \
   --limit-pages 20 \
   --window-pages 30 \
-  --dpi 90
+  --dpi 90 \
+  --audit-only
 ```
 
 The test completed successfully with:
@@ -424,6 +425,18 @@ Review report: compiled/computer_networks/review/summary.json
 ```
 
 The output folder size after this test was about `1.4M`.
+
+After manual review, the original duplicate threshold was found to be far too aggressive for blackboard pages. Visually different blackboard pages were being grouped into huge false duplicate groups, which made page selection look random.
+
+The safer review behavior is now:
+
+- default duplicate threshold raised to `0.94`
+- duplicate grouping also requires strong agreement across dHash, aHash, and pixel similarity
+- large detail-score gaps block duplicate grouping
+- `--audit-only` keeps every page and uses grouping only as a report signal
+- review thumbnail folders are cleared before each run so stale selected/skipped images do not mislead manual inspection
+
+Use audit mode first. Only remove `--audit-only` after the CSV and thumbnails look sane.
 
 ## 9. Commit History To Maintain
 
@@ -440,6 +453,7 @@ feature/auto-notes-compiler
   Show friendly missing dependency errors
   Stream compiler with bounded window traversal
   Clean temporary page store after compiler runs
+  Add conservative audit mode for manual review
 ```
 
 No remote is required at this stage.
