@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from .pipeline import CompilerConfig, compile_notes
@@ -84,7 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         duplicate_threshold=args.duplicate_threshold,
         write_review_thumbnails=args.review_thumbnails,
     )
-    result = compile_notes(config)
+    try:
+        result = compile_notes(config)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     print(f"Analyzed pages: {result.total_pages}")
     print(f"Selected pages: {result.selected_pages}")
     print(f"Skipped pages: {result.skipped_pages}")

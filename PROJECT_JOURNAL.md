@@ -381,6 +381,7 @@ feature/auto-notes-compiler
   Add automated notes compiler pipeline
   Document automated notes compiler rebuild process
   Allow CLI help without PDF dependency
+  Show friendly missing dependency errors
 ```
 
 No remote is required at this stage.
