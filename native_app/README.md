@@ -2,7 +2,7 @@
 
 This is the manual-first desktop workflow for screenshot/blackboard lecture PDFs.
 
-It deliberately avoids automatic page skipping. The user reviews pages one by one, marks them selected/rejected, toggles inversion manually, chooses 1/2/4 slides per output page, and renders final PDF parts.
+It deliberately avoids automatic page skipping. The user reviews pages one by one, marks them selected/rejected, uses view-only inversion while selecting, proceeds to a final normalization stage, chooses final inversion/layout, and renders final PDF parts.
 
 ## Runtime Model
 
@@ -11,6 +11,24 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - Uses `pdftoppm` to render only one page at a time.
 - Uses `QPdfWriter` to write final PDFs.
 - Does not ingest an entire folder of rendered pages into memory.
+- Keeps only one full-resolution preview and a small low-resolution thumbnail cache.
+
+## Stages
+
+1. Select pages.
+   - Mark pages selected/rejected.
+   - Toggle view inversion for readability.
+   - Use the right thumbnail strip to compare nearby pages without loading the whole folder.
+
+2. Normalize selected pages.
+   - Only selected pages are reviewed.
+   - Toggle final inversion per page.
+   - Use "Invert All Selected" or "Reset Final Invert" for consistent background.
+
+3. Render final.
+   - Choose 1/2/4 slides per page.
+   - Render chunked PDF parts.
+   - Open output folder after render.
 
 ## Shortcuts
 
@@ -20,6 +38,7 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - `R`: reject page
 - `I`: invert current page
 - `Ctrl+Z`: undo last decision
+- `Ctrl+Enter`: proceed from Select to Normalize
 
 ## Build Locally
 

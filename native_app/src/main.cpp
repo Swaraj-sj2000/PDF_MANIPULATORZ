@@ -2,10 +2,12 @@
 #include <QBoxLayout>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -22,12 +24,14 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QToolBar>
+#include <QUrl>
 
 #include <algorithm>
 #include <cmath>
@@ -41,7 +45,8 @@ struct PageRef {
 
 struct Decision {
     bool selected = false;
-    bool inverted = false;
+    bool viewInverted = false;
+    bool finalInverted = false;
 };
 
 struct UndoItem {
@@ -179,19 +184,38 @@ public:
     }
 
 private:
+    enum class Stage {
+        Select,
+        Normalize
+    };
+
     QListWidget* list = nullptr;
+    QListWidget* thumbList = nullptr;
     QLabel* preview = nullptr;
     QLabel* pageStatus = nullptr;
+    QLabel* stageLabel = nullptr;
     QSpinBox* dpiSpin = nullptr;
     QSpinBox* maxMbSpin = nullptr;
     QSpinBox* chunkSlidesSpin = nullptr;
     QComboBox* layoutCombo = nullptr;
+    QPushButton* proceedButton = nullptr;
+    QPushButton* backButton = nullptr;
+    QPushButton* invertAllButton = nullptr;
+    QPushButton* resetFinalInvertButton = nullptr;
+    QPushButton* openOutputButton = nullptr;
 
     QString inputDir;
+    QString lastOutputDir;
     QVector<PageRef> pages;
     QVector<Decision> decisions;
     QVector<UndoItem> undoStack;
+    QHash<int, QPixmap> thumbnailCache;
+    QVector<int> thumbnailCacheOrder;
+    QVector<int> visibleThumbIndexes;
+    Stage stage = Stage::Select;
     int currentIndex = 0;
+    int thumbnailRadius = 6;
+    int maxThumbnailCache = 48;
 
     void buildUi()
     {
@@ -207,6 +231,11 @@ private:
         auto* saveButton = new QPushButton("Save Session");
         auto* loadButton = new QPushButton("Load Session");
         auto* exportButton = new QPushButton("Render Final");
+        proceedButton = new QPushButton("Proceed: Normalize");
+        backButton = new QPushButton("Back: Select");
+        invertAllButton = new QPushButton("Invert All Selected");
+        resetFinalInvertButton = new QPushButton("Reset Final Invert");
+        openOutputButton = new QPushButton("Open Output Folder");
         toolbar->addWidget(openButton);
         toolbar->addWidget(saveButton);
         toolbar->addWidget(loadButton);
@@ -235,7 +264,13 @@ private:
         chunkSlidesSpin->setValue(80);
         toolbar->addWidget(chunkSlidesSpin);
         toolbar->addSeparator();
+        toolbar->addWidget(proceedButton);
+        toolbar->addWidget(backButton);
+        toolbar->addWidget(invertAllButton);
+        toolbar->addWidget(resetFinalInvertButton);
+        toolbar->addSeparator();
         toolbar->addWidget(exportButton);
+        toolbar->addWidget(openOutputButton);
 
         auto* splitter = new QSplitter();
         list = new QListWidget();
@@ -248,6 +283,13 @@ private:
         preview->setStyleSheet("background: #202020; color: #dddddd;");
         splitter->addWidget(preview);
         splitter->setStretchFactor(1, 1);
+
+        thumbList = new QListWidget();
+        thumbList->setMinimumWidth(210);
+        thumbList->setMaximumWidth(260);
+        thumbList->setIconSize(QSize(118, 150));
+        thumbList->setUniformItemSizes(true);
+        splitter->addWidget(thumbList);
         rootLayout->addWidget(splitter, 1);
 
         auto* controls = new QHBoxLayout();
@@ -257,7 +299,10 @@ private:
         auto* rejectButton = new QPushButton("Reject");
         auto* invertButton = new QPushButton("Invert");
         auto* undoButton = new QPushButton("Undo");
+        stageLabel = new QLabel("Stage: Select");
         pageStatus = new QLabel("0 / 0");
+        controls->addWidget(stageLabel);
+        controls->addSpacing(12);
         controls->addWidget(prevButton);
         controls->addWidget(nextButton);
         controls->addSpacing(12);
@@ -276,6 +321,11 @@ private:
         connect(saveButton, &QPushButton::clicked, this, [this]() { saveSession(); });
         connect(loadButton, &QPushButton::clicked, this, [this]() { loadSession(); });
         connect(exportButton, &QPushButton::clicked, this, [this]() { exportFinal(); });
+        connect(proceedButton, &QPushButton::clicked, this, [this]() { proceedToNormalize(); });
+        connect(backButton, &QPushButton::clicked, this, [this]() { backToSelect(); });
+        connect(invertAllButton, &QPushButton::clicked, this, [this]() { invertAllSelected(); });
+        connect(resetFinalInvertButton, &QPushButton::clicked, this, [this]() { resetFinalInversion(); });
+        connect(openOutputButton, &QPushButton::clicked, this, [this]() { openOutputFolder(); });
         connect(prevButton, &QPushButton::clicked, this, [this]() { previousPage(); });
         connect(nextButton, &QPushButton::clicked, this, [this]() { nextPage(); });
         connect(selectButton, &QPushButton::clicked, this, [this]() { selectPage(); });
@@ -288,7 +338,15 @@ private:
                 updatePreview();
             }
         });
+        connect(thumbList, &QListWidget::currentRowChanged, this, [this](int row) {
+            if (row >= 0 && row < visibleThumbIndexes.size()) {
+                currentIndex = visibleThumbIndexes[row];
+                list->setCurrentRow(currentIndex);
+                updatePreview();
+            }
+        });
         connect(dpiSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
+        updateStageControls();
     }
 
     void bindShortcuts()
@@ -299,11 +357,102 @@ private:
         new QShortcut(QKeySequence(Qt::Key_R), this, [this]() { rejectPage(); });
         new QShortcut(QKeySequence(Qt::Key_I), this, [this]() { toggleInvert(); });
         new QShortcut(QKeySequence::Undo, this, [this]() { undo(); });
+        new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), this, [this]() { proceedToNormalize(); });
     }
 
     void setStatus(const QString& text)
     {
         statusBar()->showMessage(text);
+    }
+
+    bool previewInverted(int index) const
+    {
+        if (index < 0 || index >= decisions.size()) {
+            return false;
+        }
+        return stage == Stage::Select ? decisions[index].viewInverted : decisions[index].finalInverted;
+    }
+
+    void updateStageControls()
+    {
+        const bool hasPages = !pages.isEmpty();
+        const bool normalize = stage == Stage::Normalize;
+        stageLabel->setText(normalize ? "Stage: Normalize selected pages" : "Stage: Select pages");
+        proceedButton->setEnabled(hasPages && !normalize && !selectedIndexes().isEmpty());
+        backButton->setEnabled(hasPages && normalize);
+        invertAllButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
+        resetFinalInvertButton->setEnabled(hasPages && normalize && !selectedIndexes().isEmpty());
+        openOutputButton->setEnabled(!lastOutputDir.isEmpty());
+    }
+
+    void proceedToNormalize()
+    {
+        const QVector<int> selected = selectedIndexes();
+        if (selected.isEmpty()) {
+            QMessageBox::information(this, "No selected pages", "Select pages before proceeding.");
+            return;
+        }
+        for (int index : selected) {
+            decisions[index].finalInverted = decisions[index].viewInverted;
+        }
+        stage = Stage::Normalize;
+        currentIndex = selected.first();
+        thumbnailCache.clear();
+        thumbnailCacheOrder.clear();
+        refreshList();
+        list->setCurrentRow(currentIndex);
+        updateStageControls();
+        updatePreview();
+        setStatus("Normalize selected pages: toggle final inversion, then render.");
+    }
+
+    void backToSelect()
+    {
+        if (pages.isEmpty()) {
+            return;
+        }
+        stage = Stage::Select;
+        thumbnailCache.clear();
+        thumbnailCacheOrder.clear();
+        refreshList();
+        list->setCurrentRow(currentIndex);
+        updateStageControls();
+        updatePreview();
+    }
+
+    void invertAllSelected()
+    {
+        const QVector<int> selected = selectedIndexes();
+        if (selected.isEmpty()) {
+            return;
+        }
+        for (int index : selected) {
+            decisions[index].finalInverted = true;
+            evictThumbnail(index);
+            refreshRow(index);
+        }
+        updatePreview();
+    }
+
+    void resetFinalInversion()
+    {
+        const QVector<int> selected = selectedIndexes();
+        if (selected.isEmpty()) {
+            return;
+        }
+        for (int index : selected) {
+            decisions[index].finalInverted = false;
+            evictThumbnail(index);
+            refreshRow(index);
+        }
+        updatePreview();
+    }
+
+    void openOutputFolder()
+    {
+        if (!lastOutputDir.isEmpty()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(lastOutputDir));
+        }
     }
 
     void openFolder()
@@ -355,9 +504,14 @@ private:
         pages = scanned;
         decisions = QVector<Decision>(pages.size());
         undoStack.clear();
+        thumbnailCache.clear();
+        thumbnailCacheOrder.clear();
+        visibleThumbIndexes.clear();
+        stage = Stage::Select;
         currentIndex = 0;
         refreshList();
         updatePreview();
+        updateStageControls();
         setStatus(QString("Loaded %1 pages from %2").arg(pages.size()).arg(folder));
     }
 
@@ -366,12 +520,102 @@ private:
         const Decision decision = decisions.value(index);
         const PageRef page = pages.value(index);
         const QString mark = decision.selected ? "✓" : "×";
-        const QString inv = decision.inverted ? " inv" : "";
+        const QString inv = decision.viewInverted ? " view-inv" : "";
+        const QString finalInv = decision.finalInverted ? " final-inv" : "";
         return QString("%1%2  %3  %4  p%5")
-            .arg(mark, inv)
+            .arg(mark, inv + finalInv)
             .arg(index + 1, 4, 10, QChar('0'))
             .arg(page.pdfName)
             .arg(page.pageNumber);
+    }
+
+    QVector<int> thumbnailIndexes() const
+    {
+        QVector<int> indexes;
+        if (pages.isEmpty()) {
+            return indexes;
+        }
+        if (stage == Stage::Select) {
+            const int begin = std::max(0, currentIndex - thumbnailRadius);
+            const int end = std::min(pages.size() - 1, currentIndex + thumbnailRadius);
+            for (int index = begin; index <= end; ++index) {
+                indexes.push_back(index);
+            }
+            return indexes;
+        }
+
+        const QVector<int> selected = selectedIndexes();
+        if (selected.isEmpty()) {
+            return indexes;
+        }
+        int position = selected.indexOf(currentIndex);
+        if (position < 0) {
+            position = 0;
+        }
+        const int begin = std::max(0, position - thumbnailRadius);
+        const int end = std::min(selected.size() - 1, position + thumbnailRadius);
+        for (int pos = begin; pos <= end; ++pos) {
+            indexes.push_back(selected[pos]);
+        }
+        return indexes;
+    }
+
+    QPixmap thumbnailFor(int index)
+    {
+        if (thumbnailCache.contains(index)) {
+            return thumbnailCache.value(index);
+        }
+        QString error;
+        QImage image = renderPage(pages[index], 34, previewInverted(index), &error);
+        QPixmap pixmap;
+        if (!image.isNull()) {
+            pixmap = QPixmap::fromImage(image).scaled(
+                QSize(118, 150),
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+            );
+        }
+        thumbnailCache.insert(index, pixmap);
+        thumbnailCacheOrder.push_back(index);
+        while (thumbnailCacheOrder.size() > maxThumbnailCache) {
+            const int oldest = thumbnailCacheOrder.takeFirst();
+            thumbnailCache.remove(oldest);
+        }
+        return pixmap;
+    }
+
+    void evictThumbnail(int index)
+    {
+        thumbnailCache.remove(index);
+        thumbnailCacheOrder.erase(
+            std::remove(thumbnailCacheOrder.begin(), thumbnailCacheOrder.end(), index),
+            thumbnailCacheOrder.end()
+        );
+    }
+
+    void refreshThumbnails()
+    {
+        if (!thumbList) {
+            return;
+        }
+        const QSignalBlocker blocker(thumbList);
+        thumbList->clear();
+        visibleThumbIndexes = thumbnailIndexes();
+        int currentThumbRow = -1;
+        for (int row = 0; row < visibleThumbIndexes.size(); ++row) {
+            const int pageIndex = visibleThumbIndexes[row];
+            auto* item = new QListWidgetItem(thumbnailFor(pageIndex), QString("%1 p%2")
+                .arg(pageIndex + 1, 4, 10, QChar('0'))
+                .arg(pages[pageIndex].pageNumber));
+            item->setToolTip(rowLabel(pageIndex));
+            thumbList->addItem(item);
+            if (pageIndex == currentIndex) {
+                currentThumbRow = row;
+            }
+        }
+        if (currentThumbRow >= 0) {
+            thumbList->setCurrentRow(currentThumbRow);
+        }
     }
 
     void refreshList()
@@ -383,6 +627,7 @@ private:
         if (!pages.isEmpty()) {
             list->setCurrentRow(0);
         }
+        refreshThumbnails();
     }
 
     void refreshRow(int index)
@@ -392,6 +637,7 @@ private:
         }
         list->item(index)->setText(rowLabel(index));
         list->setCurrentRow(index);
+        refreshThumbnails();
     }
 
     void updatePreview()
@@ -402,7 +648,7 @@ private:
             return;
         }
         QString error;
-        QImage image = renderPage(pages[currentIndex], dpiSpin->value(), decisions[currentIndex].inverted, &error);
+        QImage image = renderPage(pages[currentIndex], dpiSpin->value(), previewInverted(currentIndex), &error);
         if (image.isNull()) {
             preview->setText("Render failed");
             setStatus(error);
@@ -419,6 +665,7 @@ private:
         });
         pageStatus->setText(QString("%1 / %2 | selected %3").arg(currentIndex + 1).arg(pages.size()).arg(selected));
         setStatus(QString("%1 page %2").arg(pages[currentIndex].pdfName).arg(pages[currentIndex].pageNumber));
+        refreshThumbnails();
     }
 
     void snapshot()
@@ -456,7 +703,13 @@ private:
             return;
         }
         snapshot();
-        decisions[currentIndex].inverted = !decisions[currentIndex].inverted;
+        if (stage == Stage::Select) {
+            decisions[currentIndex].viewInverted = !decisions[currentIndex].viewInverted;
+            evictThumbnail(currentIndex);
+        } else {
+            decisions[currentIndex].finalInverted = !decisions[currentIndex].finalInverted;
+            evictThumbnail(currentIndex);
+        }
         refreshRow(currentIndex);
         updatePreview();
     }
@@ -470,6 +723,7 @@ private:
         if (item.index >= 0 && item.index < decisions.size()) {
             currentIndex = item.index;
             decisions[item.index] = item.decision;
+            evictThumbnail(item.index);
             refreshRow(item.index);
             updatePreview();
         }
@@ -519,7 +773,8 @@ private:
         for (const Decision& decision : decisions) {
             QJsonObject item;
             item["selected"] = decision.selected;
-            item["inverted"] = decision.inverted;
+            item["view_inverted"] = decision.viewInverted;
+            item["final_inverted"] = decision.finalInverted;
             decisionArray.push_back(item);
         }
         root["pages"] = pageArray;
@@ -558,7 +813,16 @@ private:
         QVector<Decision> loadedDecisions;
         for (const QJsonValue& value : root["decisions"].toArray()) {
             const QJsonObject item = value.toObject();
-            loadedDecisions.push_back({item["selected"].toBool(), item["inverted"].toBool()});
+            Decision decision;
+            decision.selected = item["selected"].toBool();
+            if (item.contains("view_inverted")) {
+                decision.viewInverted = item["view_inverted"].toBool();
+                decision.finalInverted = item["final_inverted"].toBool();
+            } else {
+                decision.viewInverted = item["inverted"].toBool();
+                decision.finalInverted = item["inverted"].toBool();
+            }
+            loadedDecisions.push_back(decision);
         }
         if (loadedDecisions.size() != loadedPages.size()) {
             loadedDecisions = QVector<Decision>(loadedPages.size());
@@ -567,9 +831,14 @@ private:
         pages = loadedPages;
         decisions = loadedDecisions;
         undoStack.clear();
+        thumbnailCache.clear();
+        thumbnailCacheOrder.clear();
+        visibleThumbIndexes.clear();
+        stage = Stage::Select;
         currentIndex = 0;
         refreshList();
         updatePreview();
+        updateStageControls();
         setStatus("Loaded session: " + path);
     }
 
@@ -588,6 +857,14 @@ private:
     {
         if (pages.isEmpty()) {
             QMessageBox::information(this, "Nothing to render", "Open a folder first.");
+            return;
+        }
+        if (stage == Stage::Select) {
+            QMessageBox::information(
+                this,
+                "Normalize first",
+                "Proceed to the Normalize stage before rendering. This keeps final inversion choices explicit."
+            );
             return;
         }
         const QVector<int> selected = selectedIndexes();
@@ -638,8 +915,10 @@ private:
         }
         progress.close();
         if (!outputs.isEmpty()) {
+            lastOutputDir = outputDir;
             QMessageBox::information(this, "Render complete", outputs.join("\n"));
             setStatus(QString("Rendered %1 part(s).").arg(outputs.size()));
+            updateStageControls();
         }
     }
 
@@ -653,7 +932,7 @@ private:
     {
         const int layout = layoutCombo->currentData().toInt();
         const int dpi = dpiSpin->value();
-        QImage first = renderPage(pages[selected[start]], dpi, decisions[selected[start]].inverted, error);
+        QImage first = renderPage(pages[selected[start]], dpi, decisions[selected[start]].finalInverted, error);
         if (first.isNull()) {
             return false;
         }
@@ -687,7 +966,7 @@ private:
             if (offset == 0) {
                 image = first;
             } else {
-                image = renderPage(pages[pageIndex], dpi, decisions[pageIndex].inverted, error);
+                image = renderPage(pages[pageIndex], dpi, decisions[pageIndex].finalInverted, error);
                 if (image.isNull()) {
                     return false;
                 }

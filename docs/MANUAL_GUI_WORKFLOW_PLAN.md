@@ -21,15 +21,17 @@ Why:
 2. App scans PDFs and lists every page.
 3. User reviews one page at a time.
 4. User marks page as selected or rejected.
-5. User toggles inversion manually per page.
+5. User toggles view inversion manually per page for readability.
 6. Decisions are reversible with undo.
 7. Session can be saved and loaded as JSON.
-8. User chooses output layout:
+8. User proceeds to Normalize stage.
+9. User chooses final inversion per selected page, or bulk inverts/resets selected pages.
+10. User chooses output layout:
    - 1 slide per page
    - 2 slides per page
    - 4 slides per page
-9. User renders final PDF parts.
-10. App keeps memory bounded by rendering source pages one by one.
+11. User renders final PDF parts.
+12. App keeps memory bounded by rendering source pages one by one.
 
 ## Important UX Gaps To Improve Next
 
@@ -41,6 +43,7 @@ These are not blockers for the first native app, but they matter for making it p
 - Add search/filter by PDF name.
 - Add keyboard help.
 - Add "select current and all until next PDF" for fast contiguous review.
+- Add a bigger selected-page filmstrip when in Normalize stage.
 
 ### Batch Actions
 
@@ -51,7 +54,7 @@ These are not blockers for the first native app, but they matter for making it p
 
 ### Visual Review
 
-- Add thumbnail strip for nearby pages.
+- Add thumbnail strip for nearby pages. Initial prototype keeps only a small low-DPI window cached.
 - Add side-by-side previous/current page comparison.
 - Add zoom controls.
 - Add fit-width and fit-page modes.
