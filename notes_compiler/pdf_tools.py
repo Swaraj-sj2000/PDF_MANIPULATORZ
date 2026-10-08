@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-import fitz
 from PIL import Image
 
 
@@ -51,6 +50,8 @@ def natural_key(value: str) -> list[object]:
 
 
 def render_pdf_pages(pdf_path: Path, dpi: int) -> Iterable[tuple[int, Image.Image]]:
+    import fitz
+
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
     with fitz.open(pdf_path) as document:
@@ -87,6 +88,8 @@ def fit_image_inside(image: Image.Image, max_width: int, max_height: int) -> Ima
 
 
 def split_pdf_by_size(input_pdf: Path, output_prefix: Path, max_size_bytes: int) -> list[Path]:
+    import fitz
+
     with fitz.open(input_pdf) as source:
         if input_pdf.stat().st_size <= max_size_bytes:
             final_path = output_prefix.with_name(f"{output_prefix.name}_part_01.pdf")
