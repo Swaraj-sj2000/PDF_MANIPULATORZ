@@ -1,0 +1,28 @@
+# Lecture PDFs and generated PDF outputs are data, not source.
+*.pdf
+*.PDF
+
+# Temporary/generated folders used by the existing scripts and new compiler.
+TEMP_OUTPUT/
+temp_pages/
+__temp__/
+op/
+OUTPUT/
+COMPRESSED/
+ENHANCED/
+compiled/
+review/
+*.tmp.pdf
+
+# Python/runtime noise.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local editor and environment files.
+.vscode/
+.env
