@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,7 @@ class CompilerConfig:
     write_review_thumbnails: bool = False
     window_pages: int = 120
     limit_pages: int | None = None
+    keep_temp: bool = False
 
 
 @dataclass
@@ -74,43 +76,47 @@ def compile_notes(config: CompilerConfig) -> CompileResult:
     review_dir.mkdir(parents=True, exist_ok=True)
     page_store.mkdir(parents=True, exist_ok=True)
 
-    records, groups = stream_pages(input_dir, page_store, config)
-    selected = [
-        group.best_record
-        for group in sorted(groups, key=lambda item: item.first_order_index)
-        if group.best_record.decision == "selected"
-    ]
-    skipped = [record for record in records if record.decision == "skipped"]
+    try:
+        records, groups = stream_pages(input_dir, page_store, config)
+        selected = [
+            group.best_record
+            for group in sorted(groups, key=lambda item: item.first_order_index)
+            if group.best_record.decision == "selected"
+        ]
+        skipped = [record for record in records if record.decision == "skipped"]
 
-    report_path = write_reports(
-        run_dir=run_dir,
-        review_dir=review_dir,
-        records=records,
-        groups=groups,
-        config=config,
-    )
-
-    if config.write_review_thumbnails:
-        write_review_thumbs(review_dir, records)
-
-    output_parts: list[Path] = []
-    if selected and not config.dry_run:
-        image_paths = [record.image_path for record in selected if record.image_path is not None]
-        temp_pdf = run_dir / f"{output_name}_compiled_full.pdf"
-        write_four_up_pdf_from_paths(image_paths, temp_pdf, dpi=config.dpi)
-        output_parts = split_pdf_by_size(
-            temp_pdf,
-            run_dir / f"{output_name}_compiled",
-            max_size_bytes(config.max_size_mb),
+        report_path = write_reports(
+            run_dir=run_dir,
+            review_dir=review_dir,
+            records=records,
+            groups=groups,
+            config=config,
         )
 
-    return CompileResult(
-        total_pages=len(records),
-        selected_pages=len(selected),
-        skipped_pages=len(skipped),
-        report_path=report_path,
-        output_parts=output_parts,
-    )
+        if config.write_review_thumbnails:
+            write_review_thumbs(review_dir, records)
+
+        output_parts: list[Path] = []
+        if selected and not config.dry_run:
+            image_paths = [record.image_path for record in selected if record.image_path is not None]
+            temp_pdf = run_dir / f"{output_name}_compiled_full.pdf"
+            write_four_up_pdf_from_paths(image_paths, temp_pdf, dpi=config.dpi)
+            output_parts = split_pdf_by_size(
+                temp_pdf,
+                run_dir / f"{output_name}_compiled",
+                max_size_bytes(config.max_size_mb),
+            )
+
+        return CompileResult(
+            total_pages=len(records),
+            selected_pages=len(selected),
+            skipped_pages=len(skipped),
+            report_path=report_path,
+            output_parts=output_parts,
+        )
+    finally:
+        if not config.keep_temp:
+            shutil.rmtree(page_store, ignore_errors=True)
 
 
 def stream_pages(
@@ -163,6 +169,7 @@ def stream_pages(
                 record.decision = "skipped"
                 if is_better_candidate(record, group.best_record):
                     group.best_record.decision = "skipped"
+                    delete_temp_image(group.best_record)
                     save_best_page(display, record, page_store)
                     group.best_record = record
                     group.best_analysis = analysis
@@ -224,6 +231,16 @@ def save_best_page(image: Image.Image, record: PageRecord, page_store: Path) -> 
     record.image_path = path
 
 
+def delete_temp_image(record: PageRecord) -> None:
+    if record.image_path is None:
+        return
+    try:
+        record.image_path.unlink()
+    except FileNotFoundError:
+        pass
+    record.image_path = None
+
+
 def write_reports(
     run_dir: Path,
     review_dir: Path,
@@ -268,6 +285,7 @@ def write_reports(
         "duplicate_threshold": config.duplicate_threshold,
         "window_pages": config.window_pages,
         "limit_pages": config.limit_pages,
+        "keep_temp": config.keep_temp,
         "keep_unannotated_unique": config.keep_unannotated_unique,
         "total_pages": len(records),
         "duplicate_groups": len(groups),

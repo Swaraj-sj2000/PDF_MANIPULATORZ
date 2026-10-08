@@ -83,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Stop after this many rendered pages. Useful for safe smoke tests.",
     )
+    parser.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="Keep temporary page_store images for debugging. By default they are deleted.",
+    )
     return parser
 
 
@@ -101,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         write_review_thumbnails=args.review_thumbnails,
         window_pages=args.window_pages,
         limit_pages=args.limit_pages,
+        keep_temp=args.keep_temp,
     )
     try:
         result = compile_notes(config)

@@ -380,6 +380,7 @@ The compiler was changed to stream pages one at a time:
 3. Compare it only against a recent sliding window of groups.
 4. Save the current best page image for each group to disk under `compiled/<name>/page_store/`.
 5. Drop the large in-memory image before moving to the next page.
+6. Delete temporary `page_store/` images after reports/thumbnails/final PDFs are written.
 
 The key CLI options are:
 
@@ -394,6 +395,12 @@ Only compare with recent groups. This bounds comparison cost and memory. Increas
 ```
 
 Stop after a small number of pages. This is the safe smoke-test mode and should be used before any full-folder run.
+
+```bash
+--keep-temp
+```
+
+Keep `page_store/` images for debugging. Do not use this for ordinary runs, because it can grow large. By default temporary page images are deleted automatically.
 
 Safe smoke test command:
 
@@ -432,6 +439,7 @@ feature/auto-notes-compiler
   Allow CLI help without PDF dependency
   Show friendly missing dependency errors
   Stream compiler with bounded window traversal
+  Clean temporary page store after compiler runs
 ```
 
 No remote is required at this stage.
