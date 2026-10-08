@@ -1,0 +1,13 @@
+services:
+  manual-notes-compiler:
+    build:
+      context: .
+      target: runtime
+    image: manual-notes-compiler:local
+    environment:
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: "1"
+    volumes:
+      - .:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    network_mode: host

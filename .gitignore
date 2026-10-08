@@ -26,3 +26,7 @@ venv/
 # Local editor and environment files.
 .vscode/
 .env
+
+# Native/container build outputs.
+build/
+dist/
