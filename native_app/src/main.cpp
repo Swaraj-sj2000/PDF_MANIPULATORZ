@@ -177,11 +177,33 @@ static QString humanSize(qint64 bytes)
     return QString::number(value, 'f', 1) + " " + units[unit];
 }
 
+static QIcon appIcon()
+{
+    QIcon icon = QIcon::fromTheme("manual-notes-compiler");
+    if (!icon.isNull()) {
+        return icon;
+    }
+    const QStringList candidates = {
+        "/usr/share/icons/hicolor/scalable/apps/manual-notes-compiler.svg",
+        QDir::current().filePath("assets/logo_dropzone/manual-notes-compiler.svg")
+    };
+    for (const QString& path : candidates) {
+        if (QFileInfo::exists(path)) {
+            icon = QIcon(path);
+            if (!icon.isNull()) {
+                return icon;
+            }
+        }
+    }
+    return {};
+}
+
 class MainWindow : public QMainWindow {
 public:
     MainWindow()
     {
         setWindowTitle("Manual Notes Compiler");
+        setWindowIcon(appIcon());
         resize(1220, 780);
         buildUi();
         bindShortcuts();

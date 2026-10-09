@@ -11,7 +11,7 @@ Accepted source formats:
 Preferred:
 
 ```text
-assets/logo_dropzone/logo.svg
+assets/logo_dropzone/manual-notes-compiler.svg
 ```
 
 Future packaging work should copy this into:

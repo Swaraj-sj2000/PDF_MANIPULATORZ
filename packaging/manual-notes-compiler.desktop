@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Manual Notes Compiler
+Comment=Compile screenshot lecture PDFs manually
+Exec=manual-notes-compiler
+Icon=manual-notes-compiler
+Terminal=false
+Categories=Office;Education;
