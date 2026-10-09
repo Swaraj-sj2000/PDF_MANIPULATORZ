@@ -11,7 +11,9 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - Uses `pdftoppm` to render only one page at a time.
 - Uses `QPdfWriter` to write final PDFs.
 - Does not ingest an entire folder of rendered pages into memory.
-- Keeps only one full-resolution preview and a small low-resolution thumbnail cache.
+- Gallery mode is the default review surface.
+- Gallery mode shows a bounded slice of the working window, not every page at once.
+- Keeps only one full-resolution preview in Detail mode and a capped low-resolution thumbnail cache.
 - Autosaves review sessions to `.manual_notes_autosave.json` in the opened folder.
 - Writes each render into a timestamped output folder to avoid overwriting older outputs.
 
@@ -22,10 +24,12 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
    - Toggle view inversion for readability.
    - The left list shows a working window: previous PDFs, current PDF, and future PDFs.
    - Future PDFs are lookup-only until you select/reject/invert a page or press "Activate PDF".
-   - Use the right thumbnail strip to compare nearby pages without loading the whole folder.
+   - Gallery mode lets you select many slides visually, like a phone gallery.
+   - Double-click a tile to enter Detail view for full-page inspection.
 
 2. Normalize selected pages.
    - Only selected pages are reviewed.
+   - Gallery mode still works here, but it shows selected pages only.
    - Toggle final inversion per page.
    - Use "Invert All Selected" or "Reset Final Invert" for consistent background.
 
@@ -45,6 +49,7 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
 - `Ctrl+Enter`: proceed from Select to Normalize
 - `Ctrl+S`: save session
 - `P`: pin current page for side-by-side comparison
+- `G`: toggle Gallery/Detail view
 
 ## Working Window
 
@@ -66,6 +71,17 @@ Rows are marked:
 - `[L]`: lookup-only PDF
 
 If you select, reject, or invert a lookup page, that PDF is activated automatically. Final output order is always original PDF/page order, even if you jump around randomly.
+
+## Gallery Mode
+
+Gallery mode is optimized for scanning and selecting slides.
+
+- Click a tile to toggle selection.
+- Double-click a tile to open Detail view.
+- `Tile` controls thumbnail size.
+- `Grid limit` caps how many gallery tiles are created at once.
+
+This is intentionally bounded to protect RAM and avoid rendering massive folders all at once.
 
 ## Build Locally
 

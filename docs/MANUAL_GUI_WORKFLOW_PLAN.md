@@ -20,18 +20,19 @@ Why:
 1. Open a folder containing lecture PDFs.
 2. App scans PDF page counts and stores metadata only.
 3. App displays a working window around the current PDF: lookback PDFs, current PDF, and lookahead PDFs.
-4. User marks page as selected or rejected.
-5. User toggles view inversion manually per page for readability.
-6. Decisions are reversible with undo.
-7. Session can be saved and loaded as JSON.
-8. User proceeds to Normalize stage.
-9. User chooses final inversion per selected page, or bulk inverts/resets selected pages.
-10. User chooses output layout:
+4. User reviews slides in Gallery mode by default.
+5. User marks page as selected or rejected.
+6. User toggles view inversion manually per page for readability.
+7. Decisions are reversible with undo.
+8. Session can be saved and loaded as JSON.
+9. User proceeds to Normalize stage.
+10. User chooses final inversion per selected page, or bulk inverts/resets selected pages.
+11. User chooses output layout:
    - 1 slide per page
    - 2 slides per page
    - 4 slides per page
-11. User renders final PDF parts.
-12. App keeps memory bounded by rendering source pages one by one.
+12. User renders final PDF parts.
+13. App keeps memory bounded by rendering source pages one by one.
 
 ## Working Window Behavior
 
@@ -47,9 +48,21 @@ The app avoids the "too little future context" problem by showing PDF windows in
 
 Memory remains bounded because the app renders only:
 
-- current full-resolution preview
+- current full-resolution preview in Detail mode
 - a small low-DPI thumbnail cache
+- a bounded gallery tile slice controlled by `Grid limit`
 - one page at a time during final rendering
+
+## Gallery Mode
+
+Gallery mode is now the default review surface.
+
+- It behaves like a simple phone gallery for slides.
+- Clicking a tile toggles selected/unselected.
+- Double-clicking opens Detail view.
+- `Tile` changes thumbnail size.
+- `Grid limit` caps visible tile count so large PDF windows do not create thousands of widgets.
+- Final output order remains source order, not click order.
 
 ## Important UX Gaps To Improve Next
 

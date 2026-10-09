@@ -8,6 +8,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
+#include <QIcon>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -210,6 +211,8 @@ private:
     QSpinBox* lookbackPdfSpin = nullptr;
     QSpinBox* lookaheadPdfSpin = nullptr;
     QSpinBox* zoomSpin = nullptr;
+    QSpinBox* tileSizeSpin = nullptr;
+    QSpinBox* gridLimitSpin = nullptr;
     QComboBox* layoutCombo = nullptr;
     QPushButton* proceedButton = nullptr;
     QPushButton* backButton = nullptr;
@@ -224,8 +227,10 @@ private:
     QPushButton* nextPdfButton = nullptr;
     QPushButton* pinPageButton = nullptr;
     QPushButton* clearPinButton = nullptr;
+    QPushButton* viewModeButton = nullptr;
     QPushButton* openOutputButton = nullptr;
     QPushButton* openFirstPdfButton = nullptr;
+    QWidget* previewPane = nullptr;
 
     QString inputDir;
     QString lastOutputDir;
@@ -245,8 +250,9 @@ private:
     Stage stage = Stage::Select;
     int currentIndex = 0;
     int pinnedIndex = -1;
+    bool galleryMode = true;
     int thumbnailRadius = 6;
-    int maxThumbnailCache = 48;
+    int maxThumbnailCache = 96;
     bool dirty = false;
     QTimer* autosaveTimer = nullptr;
 
@@ -329,7 +335,19 @@ private:
         zoomSpin->setRange(25, 200);
         zoomSpin->setValue(100);
         toolbar->addWidget(zoomSpin);
+        toolbar->addWidget(new QLabel(" Tile "));
+        tileSizeSpin = new QSpinBox();
+        tileSizeSpin->setRange(120, 280);
+        tileSizeSpin->setValue(170);
+        toolbar->addWidget(tileSizeSpin);
+        toolbar->addWidget(new QLabel(" Grid limit "));
+        gridLimitSpin = new QSpinBox();
+        gridLimitSpin->setRange(24, 240);
+        gridLimitSpin->setValue(72);
+        toolbar->addWidget(gridLimitSpin);
         toolbar->addSeparator();
+        viewModeButton = new QPushButton("Detail View");
+        toolbar->addWidget(viewModeButton);
         toolbar->addWidget(proceedButton);
         toolbar->addWidget(backButton);
         toolbar->addWidget(invertAllButton);
@@ -346,7 +364,7 @@ private:
         list->setMinimumWidth(360);
         splitter->addWidget(list);
 
-        auto* previewPane = new QWidget();
+        previewPane = new QWidget();
         auto* previewLayout = new QHBoxLayout(previewPane);
         previewLayout->setContentsMargins(0, 0, 0, 0);
         preview = new QLabel("No page loaded");
@@ -400,6 +418,7 @@ private:
         connect(saveButton, &QPushButton::clicked, this, [this]() { saveSession(); });
         connect(loadButton, &QPushButton::clicked, this, [this]() { loadSession(); });
         connect(exportButton, &QPushButton::clicked, this, [this]() { exportFinal(); });
+        connect(viewModeButton, &QPushButton::clicked, this, [this]() { toggleViewMode(); });
         connect(activatePdfButton, &QPushButton::clicked, this, [this]() { activateCurrentPdf(); });
         connect(selectPdfButton, &QPushButton::clicked, this, [this]() { selectCurrentPdf(); });
         connect(rejectPdfButton, &QPushButton::clicked, this, [this]() { rejectCurrentPdf(); });
@@ -424,7 +443,28 @@ private:
         connect(list, &QListWidget::currentRowChanged, this, [this](int row) {
             if (row >= 0 && row < displayedPageIndexes.size()) {
                 currentIndex = displayedPageIndexes[row];
-                updatePreview();
+                if (galleryMode) {
+                    updateGalleryStatus();
+                } else {
+                    updatePreview();
+                }
+            }
+        });
+        connect(list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+            if (!galleryMode) {
+                return;
+            }
+            const int row = list->row(item);
+            if (row >= 0 && row < displayedPageIndexes.size()) {
+                currentIndex = displayedPageIndexes[row];
+                toggleGallerySelection();
+            }
+        });
+        connect(list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+            const int row = list->row(item);
+            if (row >= 0 && row < displayedPageIndexes.size()) {
+                currentIndex = displayedPageIndexes[row];
+                setGalleryMode(false);
             }
         });
         connect(thumbList, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -436,8 +476,15 @@ private:
         });
         connect(dpiSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
         connect(zoomSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { updatePreview(); });
+        connect(tileSizeSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() {
+            thumbnailCache.clear();
+            thumbnailCacheOrder.clear();
+            refreshListKeepingCurrent();
+        });
+        connect(gridLimitSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
         connect(lookbackPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
         connect(lookaheadPdfSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this]() { refreshListKeepingCurrent(); });
+        applyViewMode();
         updateStageControls();
     }
 
@@ -452,6 +499,7 @@ private:
         new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return), this, [this]() { proceedToNormalize(); });
         new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_S), this, [this]() { saveSession(); });
         new QShortcut(QKeySequence(Qt::Key_P), this, [this]() { pinCurrentPage(); });
+        new QShortcut(QKeySequence(Qt::Key_G), this, [this]() { toggleViewMode(); });
     }
 
     void setStatus(const QString& text)
@@ -484,6 +532,46 @@ private:
     {
         dirty = true;
         updateStageControls();
+    }
+
+    void toggleViewMode()
+    {
+        setGalleryMode(!galleryMode);
+    }
+
+    void setGalleryMode(bool enabled)
+    {
+        galleryMode = enabled;
+        applyViewMode();
+        refreshListKeepingCurrent();
+        if (!galleryMode) {
+            updatePreview();
+        }
+    }
+
+    void applyViewMode()
+    {
+        if (!list || !previewPane || !thumbList) {
+            return;
+        }
+        viewModeButton->setText(galleryMode ? "Detail View" : "Gallery View");
+        previewPane->setVisible(!galleryMode);
+        thumbList->setVisible(!galleryMode);
+        list->setViewMode(galleryMode ? QListView::IconMode : QListView::ListMode);
+        list->setResizeMode(QListView::Adjust);
+        list->setMovement(QListView::Static);
+        list->setWrapping(galleryMode);
+        list->setSpacing(galleryMode ? 10 : 0);
+        if (galleryMode) {
+            const int tile = tileSizeSpin->value();
+            list->setIconSize(QSize(tile, static_cast<int>(tile * 1.25)));
+            list->setGridSize(QSize(tile + 34, static_cast<int>(tile * 1.25) + 72));
+            list->setMinimumWidth(760);
+        } else {
+            list->setIconSize(QSize());
+            list->setGridSize(QSize());
+            list->setMinimumWidth(360);
+        }
     }
 
     QString autosavePath() const
@@ -644,7 +732,11 @@ private:
         refreshList();
         list->setCurrentRow(displayedRowForPage(currentIndex));
         updateStageControls();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         setStatus("Normalize selected pages: toggle final inversion, then render.");
         markDirty();
     }
@@ -660,7 +752,11 @@ private:
         refreshList();
         list->setCurrentRow(displayedRowForPage(currentIndex));
         updateStageControls();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         markDirty();
     }
 
@@ -675,7 +771,11 @@ private:
             evictThumbnail(index);
             refreshRow(index);
         }
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         markDirty();
     }
 
@@ -690,7 +790,11 @@ private:
             evictThumbnail(index);
             refreshRow(index);
         }
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         markDirty();
     }
 
@@ -820,7 +924,11 @@ private:
         currentIndex = 0;
         pinnedIndex = -1;
         refreshList();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         updateStageControls();
         setStatus(QString("Loaded %1 pages from %2").arg(pages.size()).arg(folder));
         dirty = false;
@@ -840,6 +948,21 @@ private:
             .arg(active, done, mark, inv + finalInv)
             .arg(index + 1, 4, 10, QChar('0'))
             .arg(page.pdfName)
+            .arg(page.pageNumber);
+    }
+
+    QString itemLabel(int index) const
+    {
+        if (!galleryMode) {
+            return rowLabel(index);
+        }
+        const Decision decision = decisions.value(index);
+        const PageRef page = pages.value(index);
+        const QString mark = decision.selected ? "SELECTED" : "not selected";
+        const QString active = activePdfIndexes.contains(page.pdfIndex) ? "A" : "L";
+        const QString inv = previewInverted(index) ? " inv" : "";
+        return QString("[%1] %2%3\n%4\np%5")
+            .arg(active, mark, inv, page.pdfName)
             .arg(page.pageNumber);
     }
 
@@ -864,6 +987,27 @@ private:
             }
         }
         return indexes;
+    }
+
+    QVector<int> boundedGalleryIndexes(const QVector<int>& source) const
+    {
+        if (!galleryMode || source.size() <= gridLimitSpin->value()) {
+            return source;
+        }
+        int position = source.indexOf(currentIndex);
+        if (position < 0) {
+            position = 0;
+        }
+        const int limit = gridLimitSpin->value();
+        int begin = std::max(0, position - limit / 2);
+        int end = std::min(source.size(), begin + limit);
+        begin = std::max(0, end - limit);
+        QVector<int> bounded;
+        bounded.reserve(end - begin);
+        for (int i = begin; i < end; ++i) {
+            bounded.push_back(source[i]);
+        }
+        return bounded;
     }
 
     int displayedRowForPage(int pageIndex) const
@@ -911,8 +1055,9 @@ private:
         QImage image = renderPage(pages[index], 34, previewInverted(index), &error);
         QPixmap pixmap;
         if (!image.isNull()) {
+            const int tile = tileSizeSpin ? tileSizeSpin->value() : 170;
             pixmap = QPixmap::fromImage(image).scaled(
-                QSize(118, 150),
+                QSize(tile, static_cast<int>(tile * 1.25)),
                 Qt::KeepAspectRatio,
                 Qt::SmoothTransformation
             );
@@ -964,21 +1109,31 @@ private:
     {
         const QSignalBlocker blocker(list);
         list->clear();
-        displayedPageIndexes = displayedIndexes();
+        displayedPageIndexes = boundedGalleryIndexes(displayedIndexes());
+        applyViewMode();
         for (int pageIndex : displayedPageIndexes) {
-            list->addItem(rowLabel(pageIndex));
+            auto* item = new QListWidgetItem(galleryMode ? QIcon(thumbnailFor(pageIndex)) : QIcon(), itemLabel(pageIndex));
+            item->setToolTip(rowLabel(pageIndex));
+            list->addItem(item);
         }
         const int row = displayedRowForPage(currentIndex);
         if (row >= 0) {
             list->setCurrentRow(row);
         }
-        refreshThumbnails();
+        if (!galleryMode) {
+            refreshThumbnails();
+        }
+        updateGalleryStatus();
     }
 
     void refreshListKeepingCurrent()
     {
         refreshList();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
     }
 
     void refreshRow(int index)
@@ -987,9 +1142,15 @@ private:
         if (row < 0 || row >= list->count()) {
             return;
         }
-        list->item(row)->setText(rowLabel(index));
+        list->item(row)->setText(itemLabel(index));
+        if (galleryMode) {
+            list->item(row)->setIcon(QIcon(thumbnailFor(index)));
+        }
         list->setCurrentRow(row);
-        refreshThumbnails();
+        if (!galleryMode) {
+            refreshThumbnails();
+        }
+        updateGalleryStatus();
     }
 
     void updatePreview()
@@ -1018,7 +1179,26 @@ private:
         });
         pageStatus->setText(QString("%1 / %2 | selected %3").arg(currentIndex + 1).arg(pages.size()).arg(selected));
         setStatus(QString("%1 page %2").arg(pages[currentIndex].pdfName).arg(pages[currentIndex].pageNumber));
-        refreshThumbnails();
+        if (!galleryMode) {
+            refreshThumbnails();
+        }
+    }
+
+    void updateGalleryStatus()
+    {
+        if (pages.isEmpty()) {
+            pageStatus->setText("0 / 0");
+            return;
+        }
+        const int selected = std::count_if(decisions.begin(), decisions.end(), [](const Decision& item) {
+            return item.selected;
+        });
+        pageStatus->setText(QString("%1 / %2 | selected %3 | showing %4")
+            .arg(currentIndex + 1)
+            .arg(pages.size())
+            .arg(selected)
+            .arg(displayedPageIndexes.size()));
+        setStatus(QString("%1 page %2").arg(pages[currentIndex].pdfName).arg(pages[currentIndex].pageNumber));
     }
 
     QSize scaledPreviewSize(QLabel* label, const QSize& imageSize) const
@@ -1083,6 +1263,18 @@ private:
         refreshRow(currentIndex);
         markDirty();
         nextPage();
+    }
+
+    void toggleGallerySelection()
+    {
+        if (pages.isEmpty()) {
+            return;
+        }
+        activatePdf(currentPdfIndex());
+        snapshot();
+        decisions[currentIndex].selected = !decisions[currentIndex].selected;
+        refreshRow(currentIndex);
+        markDirty();
     }
 
     void rejectPage()
@@ -1150,7 +1342,11 @@ private:
             currentIndex = std::max(0, currentIndex - 1);
         }
         refreshList();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
     }
 
     void nextPage()
@@ -1168,7 +1364,11 @@ private:
             currentIndex = std::min(pages.size() - 1, currentIndex + 1);
         }
         refreshList();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
     }
 
     void saveSession()
@@ -1331,7 +1531,11 @@ private:
         currentIndex = std::clamp(root["current_index"].toInt(0), 0, std::max(0, pages.size() - 1));
         pinnedIndex = root["pinned_index"].toInt(-1);
         refreshList();
-        updatePreview();
+        if (galleryMode) {
+            updateGalleryStatus();
+        } else {
+            updatePreview();
+        }
         updateStageControls();
         setStatus("Loaded session: " + path);
         dirty = false;

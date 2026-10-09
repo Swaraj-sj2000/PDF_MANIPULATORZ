@@ -68,6 +68,20 @@ Added:
 - `selected_pages_report.csv` for every render
 - logo drop-zone at `assets/logo_dropzone/`
 
+## Gallery Review Pass
+
+The one-page-at-a-time workflow was too slow for visual lecture review. A gallery mode was added as the default UI.
+
+Memory and runtime safeguards:
+
+- gallery uses the existing working-window model
+- gallery applies a `Grid limit` cap before creating tile widgets
+- thumbnails are low-DPI and use the capped cache
+- full-resolution pages are not rendered while simply browsing gallery tiles
+- double-click switches to Detail view for full inspection
+- clicking a gallery tile toggles selected/unselected
+- source order is still preserved for final output
+
 ## Rebuild Commands
 
 Native build:
