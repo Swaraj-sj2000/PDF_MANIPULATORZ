@@ -25,6 +25,7 @@ It deliberately avoids automatic page skipping. The user reviews pages one by on
    - The left list shows a working window: previous PDFs, current PDF, and future PDFs.
    - Future PDFs are lookup-only until you select/reject/invert a page or press "Activate PDF".
    - Gallery mode lets you select many slides visually, like a phone gallery.
+- Use the tile checkbox to select/unselect without accidentally changing selection while navigating.
    - Double-click a tile to enter Detail view for full-page inspection.
 
 2. Normalize selected pages.
@@ -76,7 +77,8 @@ If you select, reject, or invert a lookup page, that PDF is activated automatica
 
 Gallery mode is optimized for scanning and selecting slides.
 
-- Click a tile to toggle selection.
+- Use a tile checkbox to toggle selection.
+- Click a tile body to focus/navigate.
 - Double-click a tile to open Detail view.
 - `Tile` controls thumbnail size.
 - `Grid limit` caps how many gallery tiles are created at once.

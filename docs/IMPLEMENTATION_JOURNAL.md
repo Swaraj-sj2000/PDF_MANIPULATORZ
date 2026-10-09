@@ -79,7 +79,7 @@ Memory and runtime safeguards:
 - thumbnails are low-DPI and use the capped cache
 - full-resolution pages are not rendered while simply browsing gallery tiles
 - double-click switches to Detail view for full inspection
-- clicking a gallery tile toggles selected/unselected
+- tile checkboxes toggle selected/unselected, while ordinary tile clicks only focus/navigate
 - source order is still preserved for final output
 
 ## Rebuild Commands

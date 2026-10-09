@@ -26,6 +26,8 @@ venv/
 # Local editor and environment files.
 .vscode/
 .env
+.manual_notes_autosave.json
+**/.manual_notes_autosave.json
 
 # Native/container build outputs.
 build/

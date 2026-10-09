@@ -58,7 +58,8 @@ Memory remains bounded because the app renders only:
 Gallery mode is now the default review surface.
 
 - It behaves like a simple phone gallery for slides.
-- Clicking a tile toggles selected/unselected.
+- Tile checkboxes toggle selected/unselected.
+- Clicking a tile body focuses/navigates without changing selection.
 - Double-clicking opens Detail view.
 - `Tile` changes thumbnail size.
 - `Grid limit` caps visible tile count so large PDF windows do not create thousands of widgets.

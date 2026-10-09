@@ -472,15 +472,8 @@ private:
                 }
             }
         });
-        connect(list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
-            if (!galleryMode) {
-                return;
-            }
-            const int row = list->row(item);
-            if (row >= 0 && row < displayedPageIndexes.size()) {
-                currentIndex = displayedPageIndexes[row];
-                toggleGallerySelection();
-            }
+        connect(list, &QListWidget::itemChanged, this, [this](QListWidgetItem* item) {
+            handleListItemChanged(item);
         });
         connect(list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
             const int row = list->row(item);
@@ -980,11 +973,12 @@ private:
         }
         const Decision decision = decisions.value(index);
         const PageRef page = pages.value(index);
-        const QString mark = decision.selected ? "SELECTED" : "not selected";
         const QString active = activePdfIndexes.contains(page.pdfIndex) ? "A" : "L";
         const QString inv = previewInverted(index) ? " inv" : "";
-        return QString("[%1] %2%3\n%4\np%5")
-            .arg(active, mark, inv, page.pdfName)
+        const QString done = donePdfIndexes.contains(page.pdfIndex) ? " done" : "";
+        const QString checked = decision.selected ? "✓ " : "";
+        return QString("%1[%2%3]%4\n%5\np%6")
+            .arg(checked, active, done, inv, page.pdfName)
             .arg(page.pageNumber);
     }
 
@@ -1136,6 +1130,11 @@ private:
         for (int pageIndex : displayedPageIndexes) {
             auto* item = new QListWidgetItem(galleryMode ? QIcon(thumbnailFor(pageIndex)) : QIcon(), itemLabel(pageIndex));
             item->setToolTip(rowLabel(pageIndex));
+            item->setData(Qt::UserRole, pageIndex);
+            if (galleryMode) {
+                item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+                item->setCheckState(decisions.value(pageIndex).selected ? Qt::Checked : Qt::Unchecked);
+            }
             list->addItem(item);
         }
         const int row = displayedRowForPage(currentIndex);
@@ -1167,6 +1166,8 @@ private:
         list->item(row)->setText(itemLabel(index));
         if (galleryMode) {
             list->item(row)->setIcon(QIcon(thumbnailFor(index)));
+            const QSignalBlocker blocker(list);
+            list->item(row)->setCheckState(decisions.value(index).selected ? Qt::Checked : Qt::Unchecked);
         }
         list->setCurrentRow(row);
         if (!galleryMode) {
@@ -1287,16 +1288,30 @@ private:
         nextPage();
     }
 
-    void toggleGallerySelection()
+    void handleListItemChanged(QListWidgetItem* item)
     {
-        if (pages.isEmpty()) {
+        if (!galleryMode || !item) {
             return;
         }
-        activatePdf(currentPdfIndex());
-        snapshot();
-        decisions[currentIndex].selected = !decisions[currentIndex].selected;
-        refreshRow(currentIndex);
+        bool ok = false;
+        const int pageIndex = item->data(Qt::UserRole).toInt(&ok);
+        if (!ok) {
+            return;
+        }
+        if (pageIndex < 0 || pageIndex >= decisions.size()) {
+            return;
+        }
+        const bool checked = item->checkState() == Qt::Checked;
+        if (decisions[pageIndex].selected == checked) {
+            return;
+        }
+        currentIndex = pageIndex;
+        activePdfIndexes.insert(pages[pageIndex].pdfIndex);
+        snapshotIndex(pageIndex);
+        decisions[pageIndex].selected = checked;
+        item->setText(itemLabel(pageIndex));
         markDirty();
+        updateGalleryStatus();
     }
 
     void rejectPage()
